@@ -1,11 +1,19 @@
 package cn.lacknb.blog.dialog;
 
+import com.intellij.execution.ProgramRunnerUtil;
+import com.intellij.execution.RunManager;
+import com.intellij.execution.RunnerAndConfigurationSettings;
+import com.intellij.execution.executors.DefaultRunExecutor;
+import com.intellij.execution.junit.JUnitConfiguration;
+import com.intellij.execution.junit.JUnitConfigurationType;
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.compiler.CompileContext;
-import com.intellij.openapi.compiler.CompileStatusNotification;
 import com.intellij.openapi.compiler.CompilerManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -26,11 +34,16 @@ public class CompileDialog extends DialogWrapper {
     private final Project project;
     private final JTextArea codeArea = new JTextArea(25, 80);
     private final JTextArea resultArea = new JTextArea(10, 80);
+    private final JButton runButton = new JButton("运行测试");
+
+    private String fullyQualifiedClassName;
+    private String testMethodName;
+    private VirtualFile sourceVirtualFile;
 
     public CompileDialog(Project project) {
         super(true);
         this.project = project;
-        setTitle("动态编译Java代码 (使用CompilerManager)");
+        setTitle("在当前项目环境中编译和运行");
         init();
     }
 
@@ -38,88 +51,114 @@ public class CompileDialog extends DialogWrapper {
     @Override
     protected JComponent createCenterPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 5));
-
-        panel.add(new JLabel("输入Java代码:"), BorderLayout.NORTH);
-        codeArea.setLineWrap(true);
-        codeArea.setWrapStyleWord(true);
-        panel.add(new JBScrollPane(codeArea), BorderLayout.CENTER);
-
-        JPanel resultPanel = new JPanel(new BorderLayout(0, 5));
-        resultPanel.add(new JLabel("编译结果:"), BorderLayout.NORTH);
-        resultArea.setEditable(false);
-        resultPanel.add(new JBScrollPane(resultArea), BorderLayout.CENTER);
-
-        panel.add(resultPanel, BorderLayout.SOUTH);
-
         codeArea.setText("package com.example.test;\n\n" +
-                "public class MyTestClass {\n" +
-                "    public void sayHello() {\n" +
-                "        System.out.println(\"Hello from dynamically compiled class!\")\n" +
+                "import org.junit.Test;\n" +
+                "import static org.junit.Assert.*;\n\n" +
+                "public class MyNativeTest {\n\n" +
+                "    @Test\n" +
+                "    public void nativeTest() {\n" +
+                "        System.out.println(\"Test running via native IDE runner!\");\n" +
+                "        assertEquals(4, 2 + 2);\n" +
                 "    }\n" +
                 "}");
-
+        panel.add(new JBScrollPane(codeArea), BorderLayout.CENTER);
+        resultArea.setEditable(false);
+        JPanel resultPanel = new JPanel(new BorderLayout(0,5));
+        resultPanel.add(new JLabel("结果:"), BorderLayout.NORTH);
+        resultPanel.add(new JBScrollPane(resultArea), BorderLayout.CENTER);
+        panel.add(resultPanel, BorderLayout.SOUTH);
         return panel;
     }
 
     @Override
-    protected void doOKAction() {
-        String code = codeArea.getText();
-        if (code.trim().isEmpty()) {
-            resultArea.setText("错误：代码不能为空。");
-            return;
-        }
+    protected JComponent createSouthPanel() {
+        JPanel southPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        runButton.setEnabled(false);
+        runButton.addActionListener(e -> doRunAction());
+        JButton compileButton = new JButton("编译");
+        compileButton.addActionListener(e -> doOKAction());
+        JButton cancelButton = new JButton("取消");
+        cancelButton.addActionListener(e -> doCancelAction());
+        southPanel.add(runButton);
+        southPanel.add(compileButton);
+        southPanel.add(cancelButton);
+        return southPanel;
+    }
 
+    @Override
+    public void doOKAction() {
+        runButton.setEnabled(false);
+        resultArea.setText("");
+        String code = codeArea.getText();
         String packageName = getPackageName(code);
         String className = getClassName(code);
-
-        if (className == null) {
-            resultArea.setText("错误：无法在代码中找到 public class。");
-            return;
-        }
-
-        File sourceFile = createJavaFile(packageName, className, code);
+        this.fullyQualifiedClassName = packageName.isEmpty() ? className : packageName + "." + className;
+        File sourceFile = createJavaFileInProject(packageName, className, code);
         if (sourceFile == null) {
             return;
         }
-
-        compileWithCompilerManager(sourceFile);
-    }
-
-    private String getPackageName(String code) {
-        Pattern pattern = Pattern.compile("package\\s+([\\w.]+);", Pattern.DOTALL); // Added DOTALL flag
-        Matcher matcher = pattern.matcher(code);
-        if (matcher.find()) {
-            return matcher.group(1);
+        this.sourceVirtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(sourceFile);
+        if (sourceVirtualFile == null) {
+            resultArea.setText("错误: 无法将IOFile转换为VirtualFile。");
+            return;
         }
-        return "";
+        compileWithCompilerManager(sourceVirtualFile);
     }
 
-    private String getClassName(String code) {
-        Pattern pattern = Pattern.compile("public\\s+class\\s+([\\w]+)", Pattern.DOTALL); // Added DOTALL flag
-        Matcher matcher = pattern.matcher(code);
-        if (matcher.find()) {
-            return matcher.group(1);
+    private void doRunAction() {
+        Module module = ProjectFileIndex.getInstance(project).getModuleForFile(sourceVirtualFile);
+        if (module == null) {
+            resultArea.append("\n错误: 找不到文件所属的模块。无法确定类路径。");
+            return;
         }
-        return null;
+
+        RunManager runManager = RunManager.getInstance(project);
+        JUnitConfigurationType jUnitConfigurationType = JUnitConfigurationType.getInstance();
+        RunnerAndConfigurationSettings settings = runManager.createConfiguration(
+                "[Dynamic] " + testMethodName,
+                jUnitConfigurationType.getConfigurationFactories()[0]
+        );
+
+        JUnitConfiguration configuration = (JUnitConfiguration) settings.getConfiguration();
+        configuration.setModule(module);
+
+        JUnitConfiguration.Data data = configuration.getPersistentData();
+        data.TEST_OBJECT = JUnitConfiguration.TEST_METHOD;
+        data.MAIN_CLASS_NAME = fullyQualifiedClassName;
+        data.METHOD_NAME = testMethodName;
+
+        ProgramRunnerUtil.executeConfiguration(settings, DefaultRunExecutor.getRunExecutorInstance());
+        close(DialogWrapper.OK_EXIT_CODE);
     }
 
-    private File createJavaFile(String packageName, String className, String code) {
+    private File createJavaFileInProject(String packageName, String className, String code) {
+        Module[] modules = ModuleManager.getInstance(project).getModules();
+        if (modules.length == 0) {
+            resultArea.setText("错误: 当前项目没有模块。");
+            return null;
+        }
+        VirtualFile sourceRoot = null;
+        for (Module module : modules) {
+            VirtualFile[] sourceRoots = ModuleRootManager.getInstance(module).getSourceRoots(false);
+            if (sourceRoots.length > 0) {
+                sourceRoot = sourceRoots[0];
+                break;
+            }
+        }
+        if (sourceRoot == null) {
+            resultArea.setText("错误: 在项目中找不到任何源码根目录。");
+            return null;
+        }
         try {
-            String projectBasePath = project.getBasePath();
-            String packagePath = packageName.replace('.', '/');
-            File directory = new File(projectBasePath + "/src/main/java/" + packagePath);
-
+            File directory = new File(sourceRoot.getPath() + "/" + packageName.replace('.', '/'));
             if (!directory.exists()) {
-                if (!directory.mkdirs()) {
-                    resultArea.setText("错误：创建目录失败: " + directory.getAbsolutePath());
-                    return null;
-                }
+                directory.mkdirs();
             }
             File sourceFile = new File(directory, className + ".java");
-            FileWriter writer = new FileWriter(sourceFile);
-            writer.write(code);
-            writer.close();
-            resultArea.setText("成功创建文件: " + sourceFile.getAbsolutePath() + "\n");
+            try (FileWriter writer = new FileWriter(sourceFile)) {
+                writer.write(code);
+            }
+            resultArea.setText("文件已创建于: " + sourceFile.getAbsolutePath() + "\n");
             return sourceFile;
         } catch (IOException e) {
             resultArea.setText("创建文件时出错: " + e.getMessage());
@@ -127,50 +166,54 @@ public class CompileDialog extends DialogWrapper {
         }
     }
 
-    private void compileWithCompilerManager(File sourceFile) {
+    private void compileWithCompilerManager(VirtualFile virtualFile) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            VirtualFile virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(sourceFile);
-            if (virtualFile == null) {
-                resultArea.append("错误: 找不到对应的虚拟文件 (VirtualFile)。");
-                return;
-            }
-
-            CompilerManager compilerManager = CompilerManager.getInstance(project);
-            resultArea.append("开始使用CompilerManager进行编译...\n");
-
-            compilerManager.compile(new VirtualFile[]{virtualFile}, new CompileStatusNotification() {
-                @Override
-                public void finished(boolean aborted, int errors, int warnings, CompileContext compileContext) {
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        if (errors > 0) {
-                            resultArea.append("编译失败!\n");
-                            resultArea.append("错误数量: " + errors + "\n");
-                            for (com.intellij.openapi.compiler.CompilerMessage message : compileContext.getMessages(com.intellij.openapi.compiler.CompilerMessageCategory.ERROR)) {
-                                VirtualFile file = message.getVirtualFile();
-                                String fileName = (file != null) ? file.getName() : "Unknown File";
-                                int line = -1;
-
-                                Navigatable navigatable = message.getNavigatable();
-                                if (navigatable instanceof OpenFileDescriptor) {
-                                    // Line numbers in OpenFileDescriptor are 0-based, so we add 1 for display.
-                                    line = ((OpenFileDescriptor) navigatable).getLine() + 1;
-                                }
-
-                                String detailedMessage = String.format("%s:%d - %s\n",
-                                        fileName,
-                                        line,
-                                        message.getMessage());
-                                resultArea.append(detailedMessage);
+            resultArea.append("开始使用项目环境进行编译...\n");
+            CompilerManager.getInstance(project).compile(new VirtualFile[]{virtualFile}, (aborted, errors, warnings, compileContext) -> {
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (errors > 0) {
+                        resultArea.append("编译失败!\n");
+                        for (com.intellij.openapi.compiler.CompilerMessage message : compileContext.getMessages(com.intellij.openapi.compiler.CompilerMessageCategory.ERROR)) {
+                            VirtualFile file = message.getVirtualFile();
+                            String fileName = (file != null) ? file.getName() : "Unknown File";
+                            int line = -1;
+                            Navigatable navigatable = message.getNavigatable();
+                            if (navigatable instanceof OpenFileDescriptor) {
+                                line = ((OpenFileDescriptor) navigatable).getLine() + 1;
                             }
-                        } else if (aborted) {
-                            resultArea.append("编译被中止。");
-                        } else {
-                            resultArea.append("编译成功!\n");
-                            resultArea.append("警告数量: " + warnings + "\n");
+                            resultArea.append(String.format("%s:%d - %s\n", fileName, line, message.getMessage()));
                         }
-                    });
-                }
+                    } else if (!aborted) {
+                        resultArea.append("编译成功!\n");
+                        findTestMethod(codeArea.getText());
+                    }
+                });
             });
         });
+    }
+
+    private void findTestMethod(String code) {
+        Pattern pattern = Pattern.compile("@Test\\s+public\\s+void\\s+([\\w]+)\\s*\\(");
+        Matcher matcher = pattern.matcher(code);
+        if (matcher.find()) {
+            this.testMethodName = matcher.group(1);
+            resultArea.append(String.format("发现 @Test 方法: %s\n", testMethodName));
+            runButton.setEnabled(true);
+        } else {
+            this.testMethodName = null;
+            resultArea.append("警告: 未发现 @Test 方法。\n");
+        }
+    }
+
+    private String getPackageName(String code) {
+        Pattern pattern = Pattern.compile("package\\s+([\\w.]+);\n");
+        Matcher matcher = pattern.matcher(code);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private String getClassName(String code) {
+        Pattern pattern = Pattern.compile("\\bpublic\\s+(?:final\\s+|abstract\\s+)?class\\s+(\\w+)");
+        Matcher matcher = pattern.matcher(code);
+        return matcher.find() ? matcher.group(1) : null;
     }
 }

@@ -23,7 +23,8 @@
     <!-- 依赖 -->
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
-    
+    <depends>JUnit</depends>
+
     <!-- 扩展和操作定义 -->
     <extensions defaultExtensionNs="com.intellij">
         <!-- 注册工具窗口 -->
