@@ -40,5 +40,12 @@
         <group id="AIAssistant.MethodActions" class="cn.lacknb.blog.actions.AIMethodActionGroup" popup="true">
             <add-to-group group-id="EditorGutterPopupMenu" anchor="first"/>
         </group>
+
+        <!-- Action for Dynamic Code Compilation -->
+        <action id="cn.lacknb.blog.action.CompileAction" class="cn.lacknb.blog.action.CompileAction"
+                text="Dynamic Compile Java Code"
+                description="Open a dialog to compile Java code dynamically.">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>
