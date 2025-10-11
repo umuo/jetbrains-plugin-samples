@@ -8,9 +8,14 @@ import com.intellij.execution.junit.JUnitConfiguration;
 import com.intellij.execution.junit.JUnitConfigurationType;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.compiler.CompilerManager;
+import com.intellij.openapi.compiler.CompilerMessage;
+import com.intellij.openapi.compiler.CompilerMessageCategory;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleManager;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.roots.ProjectFileIndex;
@@ -19,6 +24,7 @@ import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.pom.Navigatable;
 import com.intellij.ui.components.JBScrollPane;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
@@ -77,12 +83,21 @@ public class CompileDialog extends DialogWrapper {
         runButton.addActionListener(e -> doRunAction());
         JButton compileButton = new JButton("编译");
         compileButton.addActionListener(e -> doOKAction());
+        JButton stopButton = new JButton("停止");
+        stopButton.addActionListener(e -> doStopAction());
         JButton cancelButton = new JButton("取消");
         cancelButton.addActionListener(e -> doCancelAction());
         southPanel.add(runButton);
         southPanel.add(compileButton);
+        southPanel.add(stopButton);
         southPanel.add(cancelButton);
         return southPanel;
+    }
+
+    private void doStopAction() {
+        if (currentProgressIndicator != null) {
+            currentProgressIndicator.cancel();
+        }
     }
 
     @Override
@@ -102,7 +117,7 @@ public class CompileDialog extends DialogWrapper {
             resultArea.setText("错误: 无法将IOFile转换为VirtualFile。");
             return;
         }
-        compileWithCompilerManager(sourceVirtualFile);
+        compileWithCompilerManager_02(sourceVirtualFile);
     }
 
     private void doRunAction() {
@@ -164,6 +179,52 @@ public class CompileDialog extends DialogWrapper {
             resultArea.setText("创建文件时出错: " + e.getMessage());
             return null;
         }
+    }
+
+    private ProgressIndicator currentProgressIndicator = null;
+
+
+    /**
+     * 支持手动中断
+     * @param virtualFile
+     */
+    private void compileWithCompilerManager_02(VirtualFile virtualFile) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            resultArea.append("开始使用项目环境进行编译...\n");
+
+            Task.Backgroundable task = new Task.Backgroundable(project, "编译中", true) {
+
+                @Override
+                public void run(@NotNull ProgressIndicator progressIndicator) {
+                    currentProgressIndicator = progressIndicator;
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        CompilerManager.getInstance(project).compile(new VirtualFile[]{virtualFile}, (aborted, errors, warnings, compileContext) -> {
+                            if (aborted || currentProgressIndicator.isCanceled()) {
+                                resultArea.append("编译已被取消!\n");
+                                return;
+                            }
+                            if (errors > 0) {
+                                resultArea.append("编译失败!\n");
+                                for (CompilerMessage message : compileContext.getMessages(CompilerMessageCategory.ERROR)) {
+                                    VirtualFile file = message.getVirtualFile();
+                                    String fileName = (file != null) ? file.getName() : "Unknown File";
+                                    int line = -1;
+                                    Navigatable navigatable = message.getNavigatable();
+                                    if (navigatable instanceof OpenFileDescriptor) {
+                                        line = ((OpenFileDescriptor) navigatable).getLine() + 1;
+                                    }
+                                    resultArea.append(String.format("%s:%d - %s\n", fileName, line, message.getMessage()));
+                                }
+                            } else {
+                                resultArea.append("编译成功!\n");
+                                findTestMethod(codeArea.getText());
+                            }
+                        });
+                    });
+                }
+            };
+            ProgressManager.getInstance().run(task);
+        });
     }
 
     private void compileWithCompilerManager(VirtualFile virtualFile) {
