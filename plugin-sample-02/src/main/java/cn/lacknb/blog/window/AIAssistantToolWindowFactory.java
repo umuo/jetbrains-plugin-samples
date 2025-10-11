@@ -30,7 +30,7 @@ public class AIAssistantToolWindowFactory implements ToolWindowFactory {
         JTextArea inputArea = new JTextArea(3, 40);
         JScrollPane inputScrollPane = new JScrollPane(inputArea);
         JButton sendButton = new JButton("发送");
-        
+        sendButton.setToolTipText("<html><b>标题</b><br><font color='gray'>这是灰色的说明文字</font><br>多行文字1<br>多行文字2<br>多行文字3</html>");
         // 设置输入面板布局
         inputPanel.add(inputScrollPane, BorderLayout.CENTER);
         inputPanel.add(sendButton, BorderLayout.EAST);
