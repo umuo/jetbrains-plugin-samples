@@ -7,6 +7,7 @@ import com.intellij.execution.executors.DefaultRunExecutor;
 import com.intellij.execution.junit.JUnitConfiguration;
 import com.intellij.execution.junit.JUnitConfigurationType;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.WriteAction;
 import com.intellij.openapi.compiler.CompilerManager;
 import com.intellij.openapi.compiler.CompilerMessage;
 import com.intellij.openapi.compiler.CompilerMessageCategory;
@@ -32,6 +33,7 @@ import java.awt.*;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -108,22 +110,13 @@ public class CompileDialog extends DialogWrapper {
         String packageName = getPackageName(code);
         String className = getClassName(code);
         this.fullyQualifiedClassName = packageName.isEmpty() ? className : packageName + "." + className;
-        File sourceFile = createJavaFileInProject(packageName, className, code);
-        if (sourceFile == null) {
-            return;
-        }
-        this.sourceVirtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(sourceFile);
-        if (sourceVirtualFile == null) {
-            resultArea.setText("错误: 无法将IOFile转换为VirtualFile。");
-            return;
-        }
-        compileWithCompilerManager_02(sourceVirtualFile);
+        compileWithCompilerManager_02(packageName, className, code);
     }
 
     private void doRunAction() {
         Module module = ProjectFileIndex.getInstance(project).getModuleForFile(sourceVirtualFile);
         if (module == null) {
-            resultArea.append("\n错误: 找不到文件所属的模块。无法确定类路径。");
+            ApplicationManager.getApplication().invokeLater(() -> resultArea.append("\n错误: 找不到文件所属的模块。无法确定类路径。"));
             return;
         }
 
@@ -149,7 +142,7 @@ public class CompileDialog extends DialogWrapper {
     private File createJavaFileInProject(String packageName, String className, String code) {
         Module[] modules = ModuleManager.getInstance(project).getModules();
         if (modules.length == 0) {
-            resultArea.setText("错误: 当前项目没有模块。");
+            ApplicationManager.getApplication().invokeLater(() -> resultArea.setText("错误: 当前项目没有模块。"));
             return null;
         }
         VirtualFile sourceRoot = null;
@@ -161,7 +154,7 @@ public class CompileDialog extends DialogWrapper {
             }
         }
         if (sourceRoot == null) {
-            resultArea.setText("错误: 在项目中找不到任何源码根目录。");
+            ApplicationManager.getApplication().invokeLater(() -> resultArea.setText("错误: 在项目中找不到任何源码根目录。"));
             return null;
         }
         try {
@@ -173,10 +166,10 @@ public class CompileDialog extends DialogWrapper {
             try (FileWriter writer = new FileWriter(sourceFile)) {
                 writer.write(code);
             }
-            resultArea.setText("文件已创建于: " + sourceFile.getAbsolutePath() + "\n");
+            ApplicationManager.getApplication().invokeLater(() -> resultArea.append("文件已创建于: " + sourceFile.getAbsolutePath() + "\n"));
             return sourceFile;
         } catch (IOException e) {
-            resultArea.setText("创建文件时出错: " + e.getMessage());
+            ApplicationManager.getApplication().invokeLater(() -> resultArea.append("创建文件时出错: " + e.getMessage()));
             return null;
         }
     }
@@ -186,45 +179,72 @@ public class CompileDialog extends DialogWrapper {
 
     /**
      * 支持手动中断
-     * @param virtualFile
      */
-    private void compileWithCompilerManager_02(VirtualFile virtualFile) {
-        ApplicationManager.getApplication().invokeLater(() -> {
-            resultArea.append("开始使用项目环境进行编译...\n");
+    private void compileWithCompilerManager_02(String packageName, String className, String code) {
+        ApplicationManager.getApplication().invokeLater(() -> resultArea.append("开始使用项目环境进行编译...\n"));
 
-            Task.Backgroundable task = new Task.Backgroundable(project, "编译中", true) {
+        Task.Backgroundable task = new Task.Backgroundable(project, "编译中", true) {
+            private final Semaphore semaphore = new Semaphore(0);
+            @Override
+            public void run(@NotNull ProgressIndicator progressIndicator) {
+                currentProgressIndicator = progressIndicator;
 
-                @Override
-                public void run(@NotNull ProgressIndicator progressIndicator) {
-                    currentProgressIndicator = progressIndicator;
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        CompilerManager.getInstance(project).compile(new VirtualFile[]{virtualFile}, (aborted, errors, warnings, compileContext) -> {
+                sourceVirtualFile = WriteAction.computeAndWait( () -> {
+                    File sourceFile = createJavaFileInProject(packageName, className, code);
+                    if (sourceFile == null) {
+                        return null;
+                    }
+                    return LocalFileSystem.getInstance().refreshAndFindFileByIoFile(sourceFile);
+                });
+                if (sourceVirtualFile == null) {
+                    ApplicationManager.getApplication().invokeLater(() -> resultArea.setText("错误: 无法将IOFile转换为VirtualFile。"));
+                    return;
+                }
+
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    CompilerManager.getInstance(project).compile(new VirtualFile[]{sourceVirtualFile}, (aborted, errors, warnings, compileContext) -> {
+                        try {
                             if (aborted || currentProgressIndicator.isCanceled()) {
-                                resultArea.append("编译已被取消!\n");
+                                ApplicationManager.getApplication().invokeLater(() -> resultArea.append("编译已被取消!\n"));
                                 return;
                             }
                             if (errors > 0) {
-                                resultArea.append("编译失败!\n");
-                                for (CompilerMessage message : compileContext.getMessages(CompilerMessageCategory.ERROR)) {
-                                    VirtualFile file = message.getVirtualFile();
-                                    String fileName = (file != null) ? file.getName() : "Unknown File";
-                                    int line = -1;
-                                    Navigatable navigatable = message.getNavigatable();
-                                    if (navigatable instanceof OpenFileDescriptor) {
-                                        line = ((OpenFileDescriptor) navigatable).getLine() + 1;
+                                ApplicationManager.getApplication().invokeLater(() -> {
+                                    ApplicationManager.getApplication().invokeLater(() -> resultArea.append("编译失败!\n"));
+                                    for (CompilerMessage message : compileContext.getMessages(CompilerMessageCategory.ERROR)) {
+                                        VirtualFile file = message.getVirtualFile();
+                                        String fileName = (file != null) ? file.getName() : "Unknown File";
+                                        int line = -1;
+                                        Navigatable navigatable = message.getNavigatable();
+                                        if (navigatable instanceof OpenFileDescriptor) {
+                                            line = ((OpenFileDescriptor) navigatable).getLine() + 1;
+                                        }
+                                        int finalLine = line;
+                                        ApplicationManager.getApplication().invokeLater(() -> resultArea.append(String.format("%s:%d - %s\n", fileName, finalLine, message.getMessage())));
                                     }
-                                    resultArea.append(String.format("%s:%d - %s\n", fileName, line, message.getMessage()));
-                                }
+                                });
                             } else {
-                                resultArea.append("编译成功!\n");
-                                findTestMethod(codeArea.getText());
+                                ApplicationManager.getApplication().invokeLater(() -> {
+                                    resultArea.append("编译成功!\n");
+                                    findTestMethod(codeArea.getText());
+                                });
                             }
-                        });
+                        } finally {
+                            semaphore.release();
+                        }
                     });
+                });
+                try {
+                    semaphore.acquire();
+                } catch (InterruptedException e) {
+                    if (!currentProgressIndicator.isCanceled()) {
+                        currentProgressIndicator.cancel();
+                    }
+                    Thread.currentThread().interrupt();
                 }
-            };
-            ProgressManager.getInstance().run(task);
-        });
+            }
+        };
+        ProgressManager.getInstance().run(task);
     }
 
     private void compileWithCompilerManager(VirtualFile virtualFile) {
