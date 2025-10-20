@@ -9,4 +9,5 @@ pluginManagement {
 rootProject.name = 'jetbrain-plugin-samples'
 include 'plugin-sample-01'
 include 'plugin-sample-02'
+include 'plugin-sample-03'
 

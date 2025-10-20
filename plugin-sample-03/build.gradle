@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.intellij' version '1.15.0'
+}
+
+group = 'cn.lacknb.blog'
+version = '1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+intellij {
+    version.set("2022.2")
+    plugins = ['java', 'junit']
+    updateSinceUntilBuild = false
+    downloadSources = false
+}
+
+repositories {
+    mavenLocal()
+    maven { url 'https://maven.aliyun.com/repository/public' }
+    maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+    mavenCentral()
+}
+
+
+tasks {
+    patchPluginXml {
+        changeNotes = """
+            Advanced AI Developer Assistant initial release
+        """
+        sinceBuild.set('222')
+        untilBuild.set('232.*')
+    }
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.9.1')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+test {
+    useJUnitPlatform()
+}
