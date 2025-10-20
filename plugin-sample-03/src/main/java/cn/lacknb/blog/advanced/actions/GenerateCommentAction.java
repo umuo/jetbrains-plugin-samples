@@ -9,6 +9,7 @@ import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiParameter;
 import com.intellij.psi.javadoc.PsiDocComment;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.IncorrectOperationException;
@@ -41,8 +42,11 @@ public class GenerateCommentAction extends AnAction {
                     StringBuilder javadoc = new StringBuilder();
                     javadoc.append("/**\n");
                     javadoc.append(" * 自动生成的注释: ").append(method.getName()).append("\n");
-                    method.getParameterList().forEach(param -> javadoc.append(" * @param ")
-                            .append(param.getName()).append(" ").append(param.getType().getPresentableText()).append("\n"));
+                    for (PsiParameter param : method.getParameterList().getParameters()) {
+                        javadoc.append(" * @param ")
+                                .append(param.getName()).append(" ")
+                                .append(param.getType().getPresentableText()).append("\n");
+                    }
                     if (method.getReturnType() != null && !method.getReturnType().equals(com.intellij.psi.PsiType.VOID)) {
                         javadoc.append(" * @return ").append(method.getReturnType().getPresentableText()).append("\n");
                     }

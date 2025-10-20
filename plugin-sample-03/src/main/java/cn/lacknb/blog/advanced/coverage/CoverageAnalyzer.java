@@ -7,6 +7,7 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.search.GlobalSearchScope;
 import org.jetbrains.annotations.Nullable;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -132,7 +133,8 @@ public class CoverageAnalyzer {
         String present = type.getCanonicalText();
         if (present.endsWith("[]")) {
             // 处理一维数组即可
-            return "[" + toJvmType(PsiType.getTypeByName(present.substring(0, present.length() - 2), project, null));
+            PsiType elem = PsiType.getTypeByName(present.substring(0, present.length() - 2), project, GlobalSearchScope.allScope(project));
+            return "[" + toJvmType(elem);
         }
         switch (present) {
             case "byte": return "B";

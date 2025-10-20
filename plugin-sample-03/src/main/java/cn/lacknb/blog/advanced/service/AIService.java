@@ -25,7 +25,7 @@ public final class AIService {
         // 参数与返回值
         sb.append("返回类型: ").append(method.getReturnType() == null ? "void" : method.getReturnType().getPresentableText()).append("\n");
         sb.append("参数: ");
-        if (method.getParameterList().isEmpty()) {
+        if (method.getParameterList().getParametersCount() == 0) {
             sb.append("无\n");
         } else {
             sb.append(Arrays.stream(method.getParameterList().getParameters())
