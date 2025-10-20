@@ -1,0 +1,38 @@
+<idea-plugin>
+    <id>cn.lacknb.blog.advanced.aiassistant</id>
+    <name>Advanced AI Developer Assistant</name>
+    <version>1.0</version>
+    <vendor email="support@example.com" url="https://blog.lacknb.cn">gitsilence</vendor>
+
+    <description><![CDATA[
+        高级AI开发者助手，提供丰富功能：<br>
+        - 编译当前Java文件<br>
+        - 解释代码<br>
+        - 生成注释<br>
+        - 生成单元测试<br>
+        - 分析方法的单测覆盖率（基于JaCoCo报告和引用关系）
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>JUnit</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="AI Dev Assistant" secondary="false" icon="AllIcons.Actions.IntentionBulb" anchor="right"
+                    factoryClass="cn.lacknb.blog.advanced.window.AIDevToolWindowFactory"/>
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                       implementationClass="cn.lacknb.blog.advanced.linemarker.MethodLineMarkerProvider"/>
+    </extensions>
+
+    <actions>
+        <group id="AdvancedAI.MethodActions" class="cn.lacknb.blog.advanced.actions.AIMethodActionGroup" popup="true" text="AI助手">
+            <add-to-group group-id="EditorGutterPopupMenu" anchor="first"/>
+        </group>
+
+        <action id="cn.lacknb.blog.advanced.actions.CompileCurrentFileAction" class="cn.lacknb.blog.advanced.actions.CompileCurrentFileAction"
+                text="Compile Current Java File" description="Compile the current Java file using IDE compiler">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
