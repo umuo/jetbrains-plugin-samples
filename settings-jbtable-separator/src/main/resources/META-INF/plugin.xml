@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>cn.lacknb.blog.settings-jbtable-separator</id>
+    <name>Settings JBTable Separator</name>
+    <vendor email="support@lacknb.cn" url="https://lacknb.cn">LackNB</vendor>
+
+    <description><![CDATA[
+    A plugin demonstrating how to create a settings page with a JBTable.
+    Features:
+    - Key-Value table in settings
+    - Add, Delete, and Edit actions with toolbar icons
+    - Three tables with data linkage (left table controls right tables)
+    ]]></description>
+
+    <!-- 依赖 -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 注册设置页面 -->
+        <projectConfigurable
+            parentId="tools"
+            instance="cn.lacknb.blog.settings.TableSettingsConfigurable"
+            id="cn.lacknb.blog.settings.TableSettingsConfigurable"
+            displayName="Table Separator Settings"
+            nonDefaultProject="true"/>
+
+        <!-- 注册三表格联动设置页面 -->
+        <projectConfigurable
+            parentId="tools"
+            instance="cn.lacknb.blog.settings.ThreeTableSettingsConfigurable"
+            id="cn.lacknb.blog.settings.ThreeTableSettingsConfigurable"
+            displayName="Three Table Settings"
+            nonDefaultProject="true"/>
+    </extensions>
+</idea-plugin>
