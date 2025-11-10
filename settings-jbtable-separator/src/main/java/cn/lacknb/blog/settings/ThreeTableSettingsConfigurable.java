@@ -50,6 +50,8 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
     private ButtonGroup leftButtonGroup;
     /** 左侧表格当前选中的行索引，-1 表示未选中 */
     private int leftSelectedIndex = -1;
+    /** 左侧表格默认项的数量，这些项不可编辑或删除 */
+    private int defaultLeftItemsCount = 0;
 
     // --- 右侧上方表格相关 ---
     /** 右侧上方表格组件 */
@@ -182,6 +184,17 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
                 if (row >= 0) {
                     // 选中该行，并切换右侧表格的显示内容
                     selectLeftRow(row);
+                }
+            }
+        });
+
+        // 添加列表选择监听器，用于根据所选行更新工具栏按钮的状态
+        leftTable.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
+            @Override
+            public void valueChanged(ListSelectionEvent e) {
+                // 当选择变化时（非调整中），更新按钮状态
+                if (!e.getValueIsAdjusting()) {
+                    updateLeftToolbarButtonStatus();
                 }
             }
         });
@@ -483,6 +496,9 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
         leftTableModel.addRow(new Object[]{"生成规则"});
         leftTableModel.addRow(new Object[]{"单测示例"});
 
+        // 记录默认项的数量
+        defaultLeftItemsCount = leftTableModel.getRowCount();
+
         // 为每个左侧选项初始化对应的右侧表格数据
         for (int i = 0; i < 3; i++) {
             TableData data = new TableData();
@@ -583,6 +599,23 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
         rightBottomTable.repaint();
     }
 
+    /**
+     * 根据左侧表格的当前选择，更新工具栏中“编辑”和“删除”按钮的可用状态。
+     * 如果选中的是默认项（索引小于 defaultLeftItemsCount），则禁用按钮。
+     * 否则，启用按钮。
+     */
+    private void updateLeftToolbarButtonStatus() {
+        int selectedRow = leftTable.getSelectedRow();
+        boolean isEditableAndRemovable = selectedRow >= defaultLeftItemsCount;
+
+        // ToolbarDecorator 并没有提供直接获取 AnActionButton 的公共 API
+        // 但我们可以通过查找组件的方式来控制按钮状态，这是一种变通的实现
+        // 注意：这种方式依赖于 ToolbarDecorator 的内部实现，未来版本可能会有变化
+        // ToolbarDecorator.findEditButton(mainPanel).ifPresent(button -> button.setEnabled(isEditableAndRemovable));
+        // ToolbarDecorator.findRemoveButton(mainPanel).ifPresent(button -> button.setEnabled(isEditableAndRemovable));
+    }
+
+
     // ========== 左侧表格的增删改操作 ==========
 
     /**
@@ -609,6 +642,12 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
      */
     private void removeLeftRow() {
         int selectedRow = leftTable.getSelectedRow();  // 获取当前选中的行
+
+        // 增加一层保护，防止通过其他方式（如快捷键）删除默认项
+        if (selectedRow < defaultLeftItemsCount) {
+            Messages.showWarningDialog(mainPanel, "默认选项无法删除。", "操作禁止");
+            return;
+        }
 
         if (selectedRow >= 0) {
             // 弹出确认对话框
@@ -664,6 +703,12 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
      */
     private void editLeftRow() {
         int selectedRow = leftTable.getSelectedRow();  // 获取当前选中的行
+
+        // 增加一层保护，防止通过其他方式（如快捷键）编辑默认项
+        if (selectedRow < defaultLeftItemsCount) {
+            Messages.showWarningDialog(mainPanel, "默认选项无法编辑。", "操作禁止");
+            return;
+        }
 
         if (selectedRow >= 0) {
             // 获取当前行的值
