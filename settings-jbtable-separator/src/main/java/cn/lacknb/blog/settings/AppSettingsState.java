@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 持久化状态管理服务 (V3 - 支持自定义规则对象)
+ * 持久化状态管理服务 (V4 - 支持属性对象)
  */
 @State(
         name = "cn.lacknb.blog.settings.AppSettingsState",
@@ -45,15 +45,13 @@ public class AppSettingsState implements PersistentStateComponent<AppSettingsSta
     }
 
     public static class TableData {
-        // --- 用于自定义选项的规则 ---
         public List<CustomRule> customRules = new ArrayList<>();
         public int selectedCustomRuleIndex = -1;
 
-        // --- 用于默认选项的特殊规则编辑表格 ---
         public List<RuleItem> ruleItems = new ArrayList<>();
 
-        // --- 通用下方表格 ---
-        public List<String> bottomItems = new ArrayList<>();
+        // FIX: 使用 PropertyItem 替换 String
+        public List<PropertyItem> bottomItems = new ArrayList<>();
         public int bottomSelectedIndex = -1;
 
         @Override
@@ -74,20 +72,13 @@ public class AppSettingsState implements PersistentStateComponent<AppSettingsSta
         }
     }
 
-    /**
-     * 代表自定义规则 (名称 + 多行值)
-     */
     @Tag("CustomRule")
     public static class CustomRule {
         public String name;
         public String value;
 
         public CustomRule() {}
-
-        public CustomRule(String name, String value) {
-            this.name = name;
-            this.value = value;
-        }
+        public CustomRule(String name, String value) { this.name = name; this.value = value; }
 
         @Override
         public boolean equals(Object o) {
@@ -96,27 +87,17 @@ public class AppSettingsState implements PersistentStateComponent<AppSettingsSta
             CustomRule that = (CustomRule) o;
             return Objects.equals(name, that.name) && Objects.equals(value, that.value);
         }
-
         @Override
-        public int hashCode() {
-            return Objects.hash(name, value);
-        }
+        public int hashCode() { return Objects.hash(name, value); }
     }
 
-    /**
-     * 代表默认规则编辑表格中的一行 (Name-Value)
-     */
     @Tag("Rule")
     public static class RuleItem {
         public String name;
         public String value;
 
         public RuleItem() {}
-
-        public RuleItem(String name, String value) {
-            this.name = name;
-            this.value = value;
-        }
+        public RuleItem(String name, String value) { this.name = name; this.value = value; }
 
         @Override
         public boolean equals(Object o) {
@@ -125,11 +106,30 @@ public class AppSettingsState implements PersistentStateComponent<AppSettingsSta
             RuleItem ruleItem = (RuleItem) o;
             return Objects.equals(name, ruleItem.name) && Objects.equals(value, ruleItem.value);
         }
+        @Override
+        public int hashCode() { return Objects.hash(name, value); }
+    }
+
+    /**
+     * 新增: 代表属性表格的一行 (名称 + Java代码)
+     */
+    @Tag("Property")
+    public static class PropertyItem {
+        public String name;
+        public String value;
+
+        public PropertyItem() {}
+        public PropertyItem(String name, String value) { this.name = name; this.value = value; }
 
         @Override
-        public int hashCode() {
-            return Objects.hash(name, value);
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            PropertyItem that = (PropertyItem) o;
+            return Objects.equals(name, that.name) && Objects.equals(value, that.value);
         }
+        @Override
+        public int hashCode() { return Objects.hash(name, value); }
     }
 
     public static AppSettingsState getInstance() {

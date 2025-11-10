@@ -1,6 +1,7 @@
 package cn.lacknb.blog.settings;
 
 import com.intellij.openapi.options.SearchableConfigurable;
+import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.ui.ToolbarDecorator;
 import com.intellij.ui.table.JBTable;
@@ -21,7 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 三表格联动设置面板 (V3.0 - 集成自定义规则对话框)
+ * 三表格联动设置面板 (V4.0 - 集成属性代码编辑器)
  * @author gitsilence
  */
 public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
@@ -38,8 +39,13 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
     // UI State
     private int leftSelectedIndex = -1;
     private Map<Integer, AppSettingsState.TableData> uiDataMap = new HashMap<>();
+    private final Project project;
 
     private static final int DEFAULT_LEFT_ITEMS_COUNT = 4;
+
+    public ThreeTableSettingsConfigurable(Project project) {
+        this.project = project;
+    }
 
     @Override
     public @NotNull @NonNls String getId() {
@@ -146,7 +152,8 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
                 .setAddAction(b -> addRightBottomRow())
                 .setRemoveAction(b -> removeRightBottomRow())
                 .setEditAction(b -> editRightBottomRow())
-                .setRemoveActionUpdater(e -> rightBottomTable.getSelectedRow() != -1);
+                .setRemoveActionUpdater(e -> rightBottomTable.getSelectedRow() != -1)
+                .setEditActionUpdater(e -> rightBottomTable.getSelectedRow() != -1);
 
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.setBorder(BorderFactory.createTitledBorder("属性"));
@@ -228,6 +235,7 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
             data.ruleItems.add(new AppSettingsState.RuleItem("规则1", "Value1"));
             data.ruleItems.add(new AppSettingsState.RuleItem("规则2", "Value2"));
             data.ruleItems.add(new AppSettingsState.RuleItem("规则3", "Value3"));
+            data.bottomItems.add(new AppSettingsState.PropertyItem("示例属性", "public class Sample {}"));
             uiDataMap.put(i, data);
         }
     }
@@ -247,8 +255,8 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
 
         rightBottomTableModel.setRowCount(0);
         if (data != null) {
-            for (String item : data.bottomItems) {
-                rightBottomTableModel.addRow(new Object[]{item});
+            for (AppSettingsState.PropertyItem item : data.bottomItems) {
+                rightBottomTableModel.addRow(new Object[]{item.name});
             }
         }
         mainPanel.revalidate();
@@ -337,7 +345,6 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
     private void editRightTopRow() {
         int row = rightTopTable.getSelectedRow();
         if (row < 0) return;
-
         if (isLeftRowDefault()) {
             AppSettingsState.TableData data = uiDataMap.get(leftSelectedIndex);
             if (data == null) return;
@@ -387,9 +394,46 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
         }
     }
 
-    private void addRightBottomRow() { /* ... */ }
-    private void removeRightBottomRow() { /* ... */ }
-    private void editRightBottomRow() { /* ... */ }
+    private void addRightBottomRow() {
+        PropertyEditingDialog dialog = new PropertyEditingDialog(project, mainPanel, null);
+        if (dialog.showAndGet()) {
+            AppSettingsState.PropertyItem newItem = dialog.getProperty();
+            if (!newItem.name.isEmpty()) {
+                AppSettingsState.TableData data = uiDataMap.get(leftSelectedIndex);
+                if (data != null) {
+                    data.bottomItems.add(newItem);
+                    loadRightTablesFromUiMap(leftSelectedIndex);
+                }
+            }
+        }
+    }
+
+    private void removeRightBottomRow() {
+        int row = rightBottomTable.getSelectedRow();
+        if (row < 0) return;
+        AppSettingsState.TableData data = uiDataMap.get(leftSelectedIndex);
+        if (data != null && row < data.bottomItems.size()) {
+            data.bottomItems.remove(row);
+            if (data.bottomSelectedIndex == row) {
+                data.bottomSelectedIndex = -1;
+            } else if (data.bottomSelectedIndex > row) {
+                data.bottomSelectedIndex--;
+            }
+            loadRightTablesFromUiMap(leftSelectedIndex);
+        }
+    }
+
+    private void editRightBottomRow() {
+        int row = rightBottomTable.getSelectedRow();
+        if (row < 0) return;
+        AppSettingsState.TableData data = uiDataMap.get(leftSelectedIndex);
+        if (data == null || row >= data.bottomItems.size()) return;
+        AppSettingsState.PropertyItem itemToEdit = data.bottomItems.get(row);
+        PropertyEditingDialog dialog = new PropertyEditingDialog(project, mainPanel, itemToEdit);
+        if (dialog.showAndGet()) {
+            loadRightTablesFromUiMap(leftSelectedIndex);
+        }
+    }
     //</editor-fold>
 
     //<editor-fold desc="Renderers & Editors & Helpers">
@@ -434,7 +478,10 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
         for (AppSettingsState.CustomRule rule : original.customRules) {
             copy.customRules.add(new AppSettingsState.CustomRule(rule.name, rule.value));
         }
-        copy.bottomItems = new ArrayList<>(original.bottomItems);
+        copy.bottomItems = new ArrayList<>();
+        for (AppSettingsState.PropertyItem item : original.bottomItems) {
+            copy.bottomItems.add(new AppSettingsState.PropertyItem(item.name, item.value));
+        }
         copy.ruleItems = new ArrayList<>();
         for (AppSettingsState.RuleItem item : original.ruleItems) {
             copy.ruleItems.add(new AppSettingsState.RuleItem(item.name, item.value));
