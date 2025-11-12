@@ -173,7 +173,7 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
     //<editor-fold desc="Configurable Core Methods">
     @Override
     public boolean isModified() {
-        AppSettingsState persistedState = AppSettingsState.getInstance();
+        AppSettingsState persistedState = AppSettingsState.getInstance(project);
         if (persistedState.leftSelectedIndex != this.leftSelectedIndex) return true;
         if (persistedState.leftTableItems.size() != leftTableModel.getRowCount()) return true;
         for (int i = 0; i < leftTableModel.getRowCount(); i++) {
@@ -189,7 +189,7 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
 
     @Override
     public void apply() {
-        AppSettingsState state = AppSettingsState.getInstance();
+        AppSettingsState state = AppSettingsState.getInstance(project);
         state.leftTableItems.clear();
         state.leftSelectedIndex = this.leftSelectedIndex;
         for (int i = 0; i < leftTableModel.getRowCount(); i++) {
@@ -203,7 +203,7 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
 
     @Override
     public void reset() {
-        AppSettingsState state = AppSettingsState.getInstance();
+        AppSettingsState state = AppSettingsState.getInstance(project);
         leftTableModel.setRowCount(0);
         uiDataMap.clear();
         if (state.leftTableItems.isEmpty()) {
@@ -322,9 +322,17 @@ public class ThreeTableSettingsConfigurable implements SearchableConfigurable {
                 newMap.put(i, uiDataMap.get(i < row ? i : i + 1));
             }
             uiDataMap = newMap;
+
+            // 如果删除的是当前选中的行
             if (leftSelectedIndex == row) {
-                leftSelectedIndex = -1;
-                loadRightTablesFromUiMap(-1);
+                // 如果表格中还有数据，则默认选中第一行
+                if (leftTableModel.getRowCount() > 0) {
+                    selectLeftRow(0);
+                    leftTable.setRowSelectionInterval(0, 0);
+                } else { // 如果表格已空
+                    leftSelectedIndex = -1;
+                    loadRightTablesFromUiMap(-1);
+                }
             } else if (leftSelectedIndex > row) {
                 leftSelectedIndex--;
             }

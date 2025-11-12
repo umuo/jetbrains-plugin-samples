@@ -39,17 +39,32 @@ public class PropertyEditingDialog extends DialogWrapper {
         propertyNameField = new JBTextField(this.property.name);
 
         // FIX: 使用 JavaFileType.INSTANCE 获取正确的 Java 文件类型
-        propertyValueEditor = new EditorTextField(EditorFactory.getInstance().createDocument(this.property.value), project, JavaFileType.INSTANCE) {
+        // 创建属性值编辑器 - 这是一个支持Java语法高亮的文本编辑器组件
+        propertyValueEditor = new EditorTextField(
+            // 使用EditorFactory创建文档，初始内容为当前属性的值
+            EditorFactory.getInstance().createDocument(this.property.value),
+            // 传入当前项目上下文
+            project,
+            // 指定文件类型为Java，这样编辑器会应用Java语法高亮和相关设置
+            JavaFileType.INSTANCE
+        ) {
             @Override
             protected EditorEx createEditor() {
+                // 调用父类方法创建基础编辑器
                 EditorEx editor = super.createEditor();
+                
+                // 获取编辑器的设置对象，用于配置编辑器外观和行为
                 EditorSettings settings = editor.getSettings();
-                settings.setLineNumbersShown(true);
-                settings.setIndentGuidesShown(true);
-                settings.setFoldingOutlineShown(true);
-                settings.setAdditionalLinesCount(0);
-                settings.setAdditionalColumnsCount(0);
-                settings.setLineMarkerAreaShown(false);
+                
+                // 配置编辑器设置：
+                settings.setLineNumbersShown(true);           // 显示行号 - 方便用户定位代码位置
+                settings.setIndentGuidesShown(true);          // 显示缩进引导线 - 帮助识别代码块结构
+                settings.setFoldingOutlineShown(true);        // 显示代码折叠大纲 - 支持代码折叠功能
+                settings.setAdditionalLinesCount(0);          // 设置额外的行数为0 - 不添加额外的空白行
+                settings.setAdditionalColumnsCount(0);        // 设置额外的列数为0 - 不添加额外的空白列
+                settings.setLineMarkerAreaShown(false);       // 隐藏行标记区域 - 简化界面，隐藏不需要的标记
+                
+                // 返回配置完成的编辑器实例
                 return editor;
             }
         };

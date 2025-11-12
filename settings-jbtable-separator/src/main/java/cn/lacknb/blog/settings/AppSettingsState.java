@@ -1,6 +1,7 @@
 package cn.lacknb.blog.settings;
 
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.project.Project;
 import com.intellij.openapi.components.PersistentStateComponent;
 import com.intellij.openapi.components.State;
 import com.intellij.openapi.components.Storage;
@@ -132,8 +133,13 @@ public class AppSettingsState implements PersistentStateComponent<AppSettingsSta
         public int hashCode() { return Objects.hash(name, value); }
     }
 
-    public static AppSettingsState getInstance() {
-        return ApplicationManager.getApplication().getService(AppSettingsState.class);
+    /**
+     * 获取与指定项目关联的设置服务实例。
+     * @param project 当前项目
+     * @return 该项目的设置状态实例
+     */
+    public static AppSettingsState getInstance(@NotNull Project project) {
+        return project.getService(AppSettingsState.class);
     }
 
     @Nullable

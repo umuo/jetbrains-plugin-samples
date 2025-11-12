@@ -17,7 +17,7 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <!-- 注册持久化服务 -->
-        <applicationService serviceImplementation="cn.lacknb.blog.settings.AppSettingsState"/>
+        <projectService serviceImplementation="cn.lacknb.blog.settings.AppSettingsState"/>
 
         <!-- 注册设置页面 -->
         <projectConfigurable
