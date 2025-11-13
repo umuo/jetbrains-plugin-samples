@@ -1,14 +1,15 @@
 package cn.lacknb.blog.settings;
 
 import com.intellij.openapi.ui.DialogWrapper;
+import com.intellij.ui.JBColor;
 import com.intellij.ui.ToolbarDecorator;
 import com.intellij.ui.table.JBTable;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -57,6 +58,31 @@ public class RuleEditingDialog extends DialogWrapper {
 
         // 创建表格
         table = new JBTable(tableModel);
+
+        // 设置自定义渲染器，使不可编辑的单元格显示为灰色
+        table.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value,
+                                                           boolean isSelected, boolean hasFocus,
+                                                           int row, int column) {
+                // 首先，让默认渲染器完成其工作（例如，处理选择高亮和默认背景/前景）
+                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+
+                // 只有当单元格未被选中时，才根据可编辑性调整前景色
+                // 如果被选中，则使用JTable的选中颜色，不进行额外修改
+                if (!isSelected) {
+                    if (!table.getModel().isCellEditable(row, column)) {
+                        // 不可编辑的单元格显示为灰色
+                        c.setForeground(JBColor.GRAY);
+                    } else {
+                        // 可编辑的单元格恢复默认前景色（通常是黑色）
+                        c.setForeground(table.getForeground());
+                    }
+                }
+                return c;
+            }
+        });
+
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
 
