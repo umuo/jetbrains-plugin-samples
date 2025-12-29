@@ -395,8 +395,24 @@ class TestAgentToolWindow {
             addUserMessage(message);
             inputArea.setText("");
 
-            // Simulate assistant response
-            SwingUtilities.invokeLater(() -> {
+            // Show loading
+            LoadingComponent loadingComponent = new LoadingComponent("Thinking");
+            JPanel loadingPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            loadingPanel.setBackground(UIUtil.getPanelBackground());
+            loadingPanel.setBorder(JBUI.Borders.empty(10, 15, 10, 15));
+            loadingPanel.add(loadingComponent);
+            
+            messagesPanel.add(loadingPanel);
+            messagesPanel.revalidate();
+            messagesPanel.repaint();
+            scrollToBottom();
+
+            // Simulate assistant response with delay
+            Timer delayTimer = new Timer(1500, e -> {
+                messagesPanel.remove(loadingPanel);
+                messagesPanel.revalidate();
+                messagesPanel.repaint();
+
                 String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
                 String longResponse = "我已收到您的消息：\"" + message + "\"\n\n" +
                         "这是一个模拟的长文本回复，用于测试流式输出和代码块的显示效果。\n\n" +
@@ -426,6 +442,8 @@ class TestAgentToolWindow {
                         true
                 );
             });
+            delayTimer.setRepeats(false);
+            delayTimer.start();
         }
     }
 
@@ -599,5 +617,42 @@ class TestAgentToolWindow {
         public JComponent getComponent() {
             return editorTextField;
         }
+    }
+}
+
+class LoadingComponent extends JLabel {
+    private final Timer timer;
+    private int dotCount = 0;
+    private final String baseText;
+
+    public LoadingComponent(String text) {
+        this.baseText = text;
+        this.setFont(UIUtil.getLabelFont());
+        this.setForeground(UIUtil.getContextHelpForeground()); // 使用灰色字体
+        this.setText(baseText);
+
+        // 每 400 毫秒更新一次
+        this.timer = new Timer(400, e -> {
+            dotCount = (dotCount + 1) % 4; // 0, 1, 2, 3 循环
+            StringBuilder sb = new StringBuilder(baseText);
+            for (int i = 0; i < dotCount; i++) {
+                sb.append(".");
+            }
+            setText(sb.toString());
+        });
+    }
+
+    // 组件显示时开始动画
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        timer.start();
+    }
+
+    // 组件移除时停止动画 (非常重要，防止内存泄漏)
+    @Override
+    public void removeNotify() {
+        super.removeNotify();
+        timer.stop();
     }
 }
