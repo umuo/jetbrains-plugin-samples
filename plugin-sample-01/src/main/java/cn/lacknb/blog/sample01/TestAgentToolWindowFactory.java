@@ -159,7 +159,7 @@ class TestAgentToolWindow {
         // Add border to distinguish messages
         messagePanel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(1, 0, 0, 0, JBColor.border()),
-                JBUI.Borders.empty(10)
+                JBUI.Borders.emptyTop(10)
         ));
         messagePanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
