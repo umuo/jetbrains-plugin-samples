@@ -8,6 +8,7 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <!-- 在这里注册扩展点 -->
+        <toolWindow id="Test Agent" anchor="right" factoryClass="cn.lacknb.blog.sample01.TestAgentToolWindowFactory"/>
     </extensions>
 
     <actions>
