@@ -3,6 +3,7 @@ package cn.lacknb.blog.sample01;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowFactory;
+import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
@@ -24,9 +25,32 @@ public class TestAgentToolWindowFactory implements ToolWindowFactory {
         Content content = ContentFactory.getInstance().createContent(testAgentToolWindow.getContent(), "", false);
         toolWindow.getContentManager().addContent(content);
     }
+
+    /**
+     * 静态辅助方法：唤醒 ToolWindow 并填充内容
+     * @param project 当前项目
+     * @param content 要填充到输入框的文本
+     */
+    public static void activateAndFill(@NotNull Project project, String content) {
+        // TODO: 请确保这里的 "TestAgent" 与你 plugin.xml 中 <toolWindow id="..."> 的 id 一致
+        ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("TestAgent");
+        if (toolWindow != null) {
+            toolWindow.activate(() -> {
+                Content windowContent = toolWindow.getContentManager().getContent(0);
+                if (windowContent != null && windowContent.getComponent() instanceof JComponent) {
+                    JComponent mainPanel = (JComponent) windowContent.getComponent();
+                    Object window = mainPanel.getClientProperty(TestAgentToolWindow.WINDOW_KEY);
+                    if (window instanceof TestAgentToolWindow) {
+                        ((TestAgentToolWindow) window).setInputText(content);
+                    }
+                }
+            });
+        }
+    }
 }
 
 class TestAgentToolWindow {
+    static final String WINDOW_KEY = "TestAgentToolWindowInstance";
     private final Project project;
     private final JPanel mainPanel;
     private final JPanel messagesPanel;
@@ -37,6 +61,8 @@ class TestAgentToolWindow {
     public TestAgentToolWindow(Project project) {
         this.project = project;
         this.mainPanel = new JPanel(new BorderLayout());
+        // 将当前实例绑定到 Panel 上，方便后续获取
+        this.mainPanel.putClientProperty(WINDOW_KEY, this);
         this.messagesPanel = new ScrollablePanel();
         this.inputArea = new JTextArea(3, 50);
         this.sendButton = new JButton("发送");
@@ -69,7 +95,13 @@ class TestAgentToolWindow {
         inputArea.setForeground(UIUtil.getTextFieldForeground());
 
         JBScrollPane inputScrollPane = new JBScrollPane(inputArea);
-        inputScrollPane.setBorder(BorderFactory.createLineBorder(JBColor.border(), 1));
+        // 使用复合边框
+        inputScrollPane.setBorder(BorderFactory.createCompoundBorder(
+                // 外边距
+                BorderFactory.createEmptyBorder(2, 2, 2,2),
+                // 边框
+                BorderFactory.createLineBorder(JBColor.border(), 1)
+        ));
         inputScrollPane.setPreferredSize(new Dimension(0, 70));
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -83,6 +115,10 @@ class TestAgentToolWindow {
         bottomPanel.add(buttonPanel, BorderLayout.SOUTH);
 
         mainPanel.add(bottomPanel, BorderLayout.SOUTH);
+    }
+
+    void setInputText(String text) {
+        inputArea.setText(text);
     }
 
     private void setupInitialMessages() {
