@@ -1,0 +1,37 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+  <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+  <id>cn.lacknb.blog.kotlin-layout-demo</id>
+
+  <!-- Public plugin name should be written in Title Case.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+  <name>Kotlin-layout-demo</name>
+
+  <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+  <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+
+  <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+  <description><![CDATA[
+    Enter short description for your plugin here.<br>
+    <em>most HTML tags may be used</em>
+  ]]></description>
+
+  <!-- Product and plugin compatibility requirements.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+  <depends>com.intellij.modules.platform</depends>
+
+  <!-- Extension points defined by the plugin.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+  <extensions defaultExtensionNs="com.intellij">
+    <!--
+    定义一个工具窗口的配置
+    factoryClass: 工具窗口工厂类的完整类路径，用于创建工具窗口实例
+    id: 工具窗口的id，必须唯一，不能重复
+    icon: 工具窗口的图标 ，这里使用IDE内置图标
+    secondary: 是否为次要工具窗口，true表示是次要工具窗口，默认为false
+    -->
+    <toolWindow factoryClass="cn.lacknb.blog.kotlinlayoutdemo.toolwindow.MyToolWindowFactory" id="myToolWindowFactory"
+                icon="AllIcons.General.Modified" anchor="right" secondary="true"/>
+  </extensions>
+</idea-plugin>
