@@ -11,6 +11,19 @@ public class MarkdownRenderer {
     public String toHtml(String markdown) {
         Node node = parser.parse(markdown == null ? "" : markdown);
         String body = renderer.render(node);
-        return "<html><body>" + body + "</body></html>";
+        body = normalizeListParagraphs(body);
+        return "<html><head>" +
+                "<style>" +
+                "body{margin:0;padding:0;}" +
+                "p{margin:0;}" +
+                "ul,ol{margin:0 0 0 1.2em;padding:0;}" +
+                "li{margin:0;padding:0;}" +
+                "</style>" +
+                "</head><body>" + body + "</body></html>";
+    }
+
+    private String normalizeListParagraphs(String html) {
+        return html.replace("<li><p>", "<li>")
+                .replace("</p></li>", "</li>");
     }
 }
