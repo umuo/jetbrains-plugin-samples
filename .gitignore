@@ -38,3 +38,6 @@ bin/
 ### Mac OS ###
 .DS_Store
 /.idea/inspectionProfiles/
+
+# local LLM config (contains secrets)
+.llm-chat-stream-render.json
