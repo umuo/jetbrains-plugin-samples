@@ -44,6 +44,9 @@ public class LLMChatToolWindow {
     private final List<ChatMessage> history = new ArrayList<>();
 
     private boolean streaming = false;
+    private final javax.swing.Timer scrollTimer;
+    private boolean autoScrollEnabled = true;
+    private boolean programmaticScroll = false;
 
     public LLMChatToolWindow(Project project) {
         this.project = project;
@@ -65,6 +68,7 @@ public class LLMChatToolWindow {
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scrollPane.setBorder(JBUI.Borders.empty());
+        installScrollBehavior();
 
         inputArea = new JTextArea(3, 40);
         inputArea.setLineWrap(true);
@@ -79,6 +83,8 @@ public class LLMChatToolWindow {
         mainPanel.add(createInputPanel(), BorderLayout.SOUTH);
 
         registerSendShortcut();
+        scrollTimer = new javax.swing.Timer(100, e -> flushScroll());
+        scrollTimer.setRepeats(true);
         String tip = "Hello! Ask a question below. Markdown and code blocks are supported.";
         if (config == null) {
             tip += "\n\nTip: set OPENAI_API_KEY or create .llm-chat-stream-render.json in the project root (or set LLM_CONFIG_PATH).";
@@ -172,7 +178,7 @@ public class LLMChatToolWindow {
                 buffer.append(text);
                 javax.swing.SwingUtilities.invokeLater(() -> {
                     assistantPanel.appendText(text);
-                    scrollToBottom();
+                    requestAutoScroll();
                 });
             }
 
@@ -188,7 +194,7 @@ public class LLMChatToolWindow {
                 assistantMessage.setContent(message);
                 javax.swing.SwingUtilities.invokeLater(() -> {
                     assistantPanel.appendText("\n\n" + message);
-                    scrollToBottom();
+                    requestAutoScroll();
                     setStreaming(false);
                 });
             }
@@ -199,6 +205,9 @@ public class LLMChatToolWindow {
         streaming = value;
         sendButton.setEnabled(!value);
         inputArea.setEditable(!value);
+        if (!value) {
+            scrollTimer.stop();
+        }
     }
 
     private void clearChat() {
@@ -291,7 +300,54 @@ public class LLMChatToolWindow {
 
     private void scrollToBottom() {
         JScrollBar vertical = scrollPane.getVerticalScrollBar();
-        vertical.setValue(vertical.getMaximum());
+        programmaticScroll = true;
+        try {
+            vertical.setValue(vertical.getMaximum());
+        } finally {
+            programmaticScroll = false;
+        }
+    }
+
+    private void requestAutoScroll() {
+        if (!autoScrollEnabled) {
+            return;
+        }
+        if (!scrollTimer.isRunning()) {
+            scrollTimer.start();
+        }
+    }
+
+    private void flushScroll() {
+        if (!autoScrollEnabled) {
+            scrollTimer.stop();
+            return;
+        }
+        scrollToBottom();
+    }
+
+    private boolean isNearBottom() {
+        JScrollBar vertical = scrollPane.getVerticalScrollBar();
+        int max = vertical.getMaximum();
+        int extent = vertical.getModel().getExtent();
+        int value = vertical.getValue();
+        return max - (value + extent) < 40;
+    }
+
+    private void installScrollBehavior() {
+        JScrollBar vertical = scrollPane.getVerticalScrollBar();
+        vertical.addAdjustmentListener(e -> {
+            if (programmaticScroll) {
+                return;
+            }
+            if (e.getValueIsAdjusting()) {
+                if (!isNearBottom()) {
+                    autoScrollEnabled = false;
+                    scrollTimer.stop();
+                }
+            } else if (isNearBottom()) {
+                autoScrollEnabled = true;
+            }
+        });
     }
 
     private static class ScrollablePanel extends JPanel implements javax.swing.Scrollable {

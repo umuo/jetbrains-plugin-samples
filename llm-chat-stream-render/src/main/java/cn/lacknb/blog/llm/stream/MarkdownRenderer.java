@@ -14,9 +14,9 @@ public class MarkdownRenderer {
         body = normalizeListParagraphs(body);
         return "<html><head>" +
                 "<style>" +
-                "body{margin:0;padding:0;}" +
+                "body{text-align:left;margin:0;padding:0;}" +
                 "p{margin:0;}" +
-                "ul,ol{margin:0 0 0 1.2em;padding:0;}" +
+                "ul,ol{margin:0 0 0 1.2em;padding:0;text-align:left;}" +
                 "li{margin:0;padding:0;}" +
                 "</style>" +
                 "</head><body>" + body + "</body></html>";
