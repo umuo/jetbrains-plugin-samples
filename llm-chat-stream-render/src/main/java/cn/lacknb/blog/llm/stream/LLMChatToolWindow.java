@@ -7,10 +7,14 @@ import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.wm.ToolWindow;
+import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.JBColor;
+import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
+import com.intellij.ui.content.Content;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.AbstractAction;
@@ -32,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class LLMChatToolWindow {
+    public static final String TOOL_WINDOW_ID = "LLM Chat Stream";
     private static final String WINDOW_KEY = "LLMChatToolWindowInstance";
 
     private final Project project;
@@ -40,8 +45,13 @@ public class LLMChatToolWindow {
     private final JBScrollPane scrollPane;
     private final JTextArea inputArea;
     private final JButton sendButton;
+    private final JButton stopButton;
+    private final JBLabel statusLabel;
     private final OpenAIChatService chatService;
     private final List<ChatMessage> history = new ArrayList<>();
+    private OpenAIChatService.StreamSession currentSession;
+    private long requestCounter = 0L;
+    private long activeRequestId = -1L;
 
     private boolean streaming = false;
     private final javax.swing.Timer scrollTimer;
@@ -78,6 +88,13 @@ public class LLMChatToolWindow {
         sendButton = new JButton("Send");
         sendButton.addActionListener(e -> sendMessage());
 
+        stopButton = new JButton("Stop");
+        stopButton.setEnabled(false);
+        stopButton.addActionListener(e -> stopCurrentStream("Generation stopped.", true));
+
+        statusLabel = new JBLabel("Idle");
+        statusLabel.setForeground(UIUtil.getLabelInfoForeground());
+
         mainPanel.add(createToolbar(), BorderLayout.NORTH);
         mainPanel.add(scrollPane, BorderLayout.CENTER);
         mainPanel.add(createInputPanel(), BorderLayout.SOUTH);
@@ -94,6 +111,34 @@ public class LLMChatToolWindow {
 
     public JComponent getContent() {
         return mainPanel;
+    }
+
+    public static LLMChatToolWindow findInstance(Project project) {
+        ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID);
+        if (toolWindow == null) {
+            return null;
+        }
+        for (Content content : toolWindow.getContentManager().getContents()) {
+            JComponent component = content.getComponent();
+            Object instance = component.getClientProperty(WINDOW_KEY);
+            if (instance instanceof LLMChatToolWindow) {
+                return (LLMChatToolWindow) instance;
+            }
+        }
+        return null;
+    }
+
+    public static void showAndSubmit(Project project, String prompt) {
+        ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID);
+        if (toolWindow == null) {
+            return;
+        }
+        toolWindow.show(() -> {
+            LLMChatToolWindow instance = findInstance(project);
+            if (instance != null) {
+                instance.submitPrompt(prompt, true);
+            }
+        });
     }
 
     private JComponent createToolbar() {
@@ -131,6 +176,8 @@ public class LLMChatToolWindow {
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
         buttonPanel.setBackground(UIUtil.getPanelBackground());
+        buttonPanel.add(statusLabel);
+        buttonPanel.add(stopButton);
         buttonPanel.add(sendButton);
 
         inputPanel.add(inputScroll, BorderLayout.CENTER);
@@ -150,33 +197,54 @@ public class LLMChatToolWindow {
     }
 
     private void sendMessage() {
-        if (streaming) {
-            return;
-        }
         String text = inputArea.getText().trim();
         if (text.isEmpty()) {
             return;
         }
+        inputArea.setText("");
+        submitPrompt(text, false);
+    }
 
+    public void submitPrompt(String text, boolean newSession) {
+        if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+
+        if (streaming) {
+            stopCurrentStream("Previous task stopped.", false);
+        }
+
+        if (newSession) {
+            clearChat();
+        } else {
+            history.clear();
+        }
         addUserMessage(text);
         history.add(new ChatMessage("user", text));
-        inputArea.setText("");
 
         StreamMarkdownPanel assistantPanel = addAssistantMessagePanel();
         ChatMessage assistantMessage = new ChatMessage("assistant", "");
         history.add(assistantMessage);
 
         setStreaming(true);
+        long requestId = ++requestCounter;
+        activeRequestId = requestId;
         List<ChatMessage> requestMessages = new ArrayList<>(history);
         requestMessages.remove(requestMessages.size() - 1);
 
-        chatService.streamChatCompletion(requestMessages, new OpenAIChatService.StreamHandler() {
+        currentSession = chatService.streamChatCompletion(requestMessages, new OpenAIChatService.StreamHandler() {
             private final StringBuilder buffer = new StringBuilder();
 
             @Override
             public void onDelta(String text) {
+                if (requestId != activeRequestId) {
+                    return;
+                }
                 buffer.append(text);
                 javax.swing.SwingUtilities.invokeLater(() -> {
+                    if (requestId != activeRequestId) {
+                        return;
+                    }
                     assistantPanel.appendText(text);
                     requestAutoScroll();
                 });
@@ -184,15 +252,29 @@ public class LLMChatToolWindow {
 
             @Override
             public void onComplete(String fullText) {
+                if (requestId != activeRequestId) {
+                    return;
+                }
                 assistantMessage.setContent(fullText);
-                javax.swing.SwingUtilities.invokeLater(() -> setStreaming(false));
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    if (requestId != activeRequestId) {
+                        return;
+                    }
+                    setStreaming(false);
+                });
             }
 
             @Override
             public void onError(Throwable error) {
+                if (requestId != activeRequestId) {
+                    return;
+                }
                 String message = "**Error:** " + error.getMessage();
                 assistantMessage.setContent(message);
                 javax.swing.SwingUtilities.invokeLater(() -> {
+                    if (requestId != activeRequestId) {
+                        return;
+                    }
                     assistantPanel.appendText("\n\n" + message);
                     requestAutoScroll();
                     setStreaming(false);
@@ -203,10 +285,30 @@ public class LLMChatToolWindow {
 
     private void setStreaming(boolean value) {
         streaming = value;
+        statusLabel.setText(value ? "Generating..." : "Idle");
         sendButton.setEnabled(!value);
         inputArea.setEditable(!value);
+        stopButton.setEnabled(value);
+        if (!value) {
+            currentSession = null;
+        }
         if (!value) {
             scrollTimer.stop();
+        }
+    }
+
+    private void stopCurrentStream(String reason, boolean addNotice) {
+        if (!streaming) {
+            return;
+        }
+        OpenAIChatService.StreamSession session = currentSession;
+        if (session != null) {
+            session.cancel();
+        }
+        activeRequestId = -1L;
+        setStreaming(false);
+        if (addNotice) {
+            addAssistantInfo(reason, false);
         }
     }
 

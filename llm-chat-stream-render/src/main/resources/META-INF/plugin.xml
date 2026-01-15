@@ -5,8 +5,11 @@
     <vendor email="gitsilence@gmail.com" url="https://blog.lacknb.cn">gitsilence</vendor>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <codeInsight.lineMarkerProvider language="JAVA"
+                                        implementationClass="cn.lacknb.blog.llm.stream.MethodActionLineMarkerProvider"/>
         <toolWindow id="LLM Chat Stream" anchor="right"
                     factoryClass="cn.lacknb.blog.llm.stream.LLMChatToolWindowFactory"/>
     </extensions>

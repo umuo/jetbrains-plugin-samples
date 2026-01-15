@@ -13,6 +13,10 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class OpenAIChatService {
     private static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -36,12 +40,12 @@ public class OpenAIChatService {
         return System.getenv("OPENAI_API_KEY");
     }
 
-    public void streamChatCompletion(List<ChatMessage> messages, StreamHandler handler) {
+    public StreamSession streamChatCompletion(List<ChatMessage> messages, StreamHandler handler) {
         if (apiKey == null || apiKey.isBlank()) {
             handler.onError(new IllegalStateException(
                     "Missing API key. Set OPENAI_API_KEY or create .llm-chat-stream-render.json (or set LLM_CONFIG_PATH)."
             ));
-            return;
+            return StreamSession.noop();
         }
 
         JsonObject payload = new JsonObject();
@@ -66,21 +70,35 @@ public class OpenAIChatService {
                 .POST(HttpRequest.BodyPublishers.ofString(payload.toString()))
                 .build();
 
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        AtomicReference<java.util.stream.Stream<String>> streamRef = new AtomicReference<>();
+        CompletableFuture<HttpResponse<java.util.stream.Stream<String>>> future = httpClient.sendAsync(
+                request,
+                HttpResponse.BodyHandlers.ofLines()
+        );
+
         new Thread(() -> {
             try {
-                HttpResponse<java.util.stream.Stream<String>> response = httpClient.send(
-                        request,
-                        HttpResponse.BodyHandlers.ofLines()
-                );
+                HttpResponse<java.util.stream.Stream<String>> response = future.join();
+                if (cancelled.get()) {
+                    return;
+                }
 
                 if (response.statusCode() != 200) {
-                    handler.onError(new IOException("OpenAI API error: HTTP " + response.statusCode()));
+                    if (!cancelled.get()) {
+                        handler.onError(new IOException("OpenAI API error: HTTP " + response.statusCode()));
+                    }
                     return;
                 }
 
                 StringBuilder full = new StringBuilder();
-                Iterator<String> iterator = response.body().iterator();
+                java.util.stream.Stream<String> bodyStream = response.body();
+                streamRef.set(bodyStream);
+                Iterator<String> iterator = bodyStream.iterator();
                 while (iterator.hasNext()) {
+                    if (cancelled.get()) {
+                        return;
+                    }
                     String line = iterator.next();
                     if (!line.startsWith("data:")) {
                         continue;
@@ -90,7 +108,9 @@ public class OpenAIChatService {
                         continue;
                     }
                     if ("[DONE]".equals(data)) {
-                        handler.onComplete(full.toString());
+                        if (!cancelled.get()) {
+                            handler.onComplete(full.toString());
+                        }
                         return;
                     }
 
@@ -108,14 +128,26 @@ public class OpenAIChatService {
                     String chunk = delta.get("content").getAsString();
                     if (!chunk.isEmpty()) {
                         full.append(chunk);
-                        handler.onDelta(chunk);
+                        if (!cancelled.get()) {
+                            handler.onDelta(chunk);
+                        }
                     }
                 }
-                handler.onComplete(full.toString());
+                if (!cancelled.get()) {
+                    handler.onComplete(full.toString());
+                }
+            } catch (CancellationException e) {
+                if (!cancelled.get()) {
+                    handler.onError(e);
+                }
             } catch (Exception e) {
-                handler.onError(e);
+                if (!cancelled.get()) {
+                    handler.onError(e);
+                }
             }
         }, "openai-stream-thread").start();
+
+        return new StreamSession(cancelled, future, streamRef);
     }
 
     public interface StreamHandler {
@@ -124,5 +156,36 @@ public class OpenAIChatService {
         void onComplete(String fullText);
 
         void onError(Throwable error);
+    }
+
+    public static final class StreamSession {
+        private final AtomicBoolean cancelled;
+        private final CompletableFuture<HttpResponse<java.util.stream.Stream<String>>> future;
+        private final AtomicReference<java.util.stream.Stream<String>> streamRef;
+
+        private StreamSession(AtomicBoolean cancelled,
+                              CompletableFuture<HttpResponse<java.util.stream.Stream<String>>> future,
+                              AtomicReference<java.util.stream.Stream<String>> streamRef) {
+            this.cancelled = cancelled;
+            this.future = future;
+            this.streamRef = streamRef;
+        }
+
+        public static StreamSession noop() {
+            return new StreamSession(new AtomicBoolean(true), null, new AtomicReference<>());
+        }
+
+        public void cancel() {
+            if (cancelled.getAndSet(true)) {
+                return;
+            }
+            if (future != null) {
+                future.cancel(true);
+            }
+            java.util.stream.Stream<String> stream = streamRef.getAndSet(null);
+            if (stream != null) {
+                stream.close();
+            }
+        }
     }
 }
