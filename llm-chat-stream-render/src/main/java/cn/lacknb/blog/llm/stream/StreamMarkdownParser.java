@@ -7,10 +7,12 @@ import java.util.regex.Pattern;
 
 public class StreamMarkdownParser {
     private static final Pattern MATCHER_PATTERN = Pattern.compile(
-            "```([\\w#+.-]*\\n*)?(.*?)```" +
-                    "|```([\\w#+.-]*\\n*)?(.*)" +
-                    "|<think>(.*?)</think>" +
-                    "|<think>(.*)",
+            "<tool(?:_call)?\\s+name=\"([^\"]+)\"\\s*>(.*?)</tool(?:_call)?>"
+                    + "|<tool(?:_call)?\\s+name=\"([^\"]+)\"\\s*>(.*)"
+                    + "|```([\\w#+.-]*\\n*)?(.*?)```"
+                    + "|```([\\w#+.-]*\\n*)?(.*)"
+                    + "|<think>(.*?)</think>"
+                    + "|<think>(.*)",
             Pattern.DOTALL
     );
 
@@ -25,36 +27,57 @@ public class StreamMarkdownParser {
                         MarkdownBlock.Type.TEXT,
                         fullText.substring(lastEnd, matcher.start()),
                         null,
+                        null,
                         true
                 ));
             }
 
             if (matcher.group(1) != null) {
                 blocks.add(new MarkdownBlock(
-                        MarkdownBlock.Type.CODE,
+                        MarkdownBlock.Type.TOOL,
                         matcher.group(2),
-                        matcher.group(1).trim(),
+                        null,
+                        matcher.group(1),
                         true
                 ));
-            } else if (matcher.group(3) != null || fullText.startsWith("```", matcher.start())) {
-                String lang = matcher.group(3) != null ? matcher.group(3).trim() : "";
+            } else if (matcher.group(3) != null) {
                 blocks.add(new MarkdownBlock(
-                        MarkdownBlock.Type.CODE,
+                        MarkdownBlock.Type.TOOL,
                         matcher.group(4),
-                        lang,
+                        null,
+                        matcher.group(3),
                         false
                 ));
             } else if (matcher.group(5) != null) {
                 blocks.add(new MarkdownBlock(
-                        MarkdownBlock.Type.THINK,
-                        matcher.group(5),
+                        MarkdownBlock.Type.CODE,
+                        matcher.group(6),
+                        matcher.group(5).trim(),
                         null,
                         true
                 ));
-            } else if (matcher.group(6) != null) {
+            } else if (matcher.group(7) != null || fullText.startsWith("```", matcher.start())) {
+                String lang = matcher.group(7) != null ? matcher.group(7).trim() : "";
+                blocks.add(new MarkdownBlock(
+                        MarkdownBlock.Type.CODE,
+                        matcher.group(8),
+                        lang,
+                        null,
+                        false
+                ));
+            } else if (matcher.group(9) != null) {
                 blocks.add(new MarkdownBlock(
                         MarkdownBlock.Type.THINK,
-                        matcher.group(6),
+                        matcher.group(9),
+                        null,
+                        null,
+                        true
+                ));
+            } else if (matcher.group(10) != null) {
+                blocks.add(new MarkdownBlock(
+                        MarkdownBlock.Type.THINK,
+                        matcher.group(10),
+                        null,
                         null,
                         false
                 ));
@@ -67,6 +90,7 @@ public class StreamMarkdownParser {
             blocks.add(new MarkdownBlock(
                     MarkdownBlock.Type.TEXT,
                     fullText.substring(lastEnd),
+                    null,
                     null,
                     true
             ));

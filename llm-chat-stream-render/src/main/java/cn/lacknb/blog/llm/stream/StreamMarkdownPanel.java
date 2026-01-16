@@ -20,6 +20,7 @@ import javax.swing.JEditorPane;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.ScrollPaneConstants;
+import javax.swing.SwingConstants;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -81,8 +82,13 @@ public class StreamMarkdownPanel extends JPanel {
             if (i < blockComponents.size()) {
                 MarkdownBlock oldBlock = currentBlocks.get(i);
                 boolean sameType = oldBlock.getType() == newBlock.getType();
-                boolean sameLanguage = Objects.equals(oldBlock.getLanguage(), newBlock.getLanguage());
-                if (sameType && (newBlock.getType() != MarkdownBlock.Type.CODE || sameLanguage)) {
+                boolean sameMeta = true;
+                if (newBlock.getType() == MarkdownBlock.Type.CODE) {
+                    sameMeta = Objects.equals(oldBlock.getLanguage(), newBlock.getLanguage());
+                } else if (newBlock.getType() == MarkdownBlock.Type.TOOL) {
+                    sameMeta = Objects.equals(oldBlock.getToolName(), newBlock.getToolName());
+                }
+                if (sameType && sameMeta) {
                     updateComponent(blockComponents.get(i), oldBlock, newBlock);
                 } else {
                     remove(blockComponents.get(i));
@@ -116,6 +122,8 @@ public class StreamMarkdownPanel extends JPanel {
         switch (block.getType()) {
             case CODE:
                 return createCodeComponent(block);
+            case TOOL:
+                return createToolComponent(block);
             case THINK:
                 JLabel thinkLabel = new JLabel(renderer.toHtml("*" + block.getContent() + "*"));
                 thinkLabel.setForeground(JBColor.GRAY);
@@ -179,6 +187,13 @@ public class StreamMarkdownPanel extends JPanel {
         return wrapper;
     }
 
+    private Component createToolComponent(MarkdownBlock block) {
+        ToolCallPanel panel = new ToolCallPanel(project, block.getToolName(), block.getContent());
+        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        return panel;
+    }
+
     private void updateComponent(Component component, MarkdownBlock oldBlock, MarkdownBlock newBlock) {
         if (newBlock.getType() == MarkdownBlock.Type.CODE) {
             if (component instanceof CodeBlockPanel) {
@@ -195,6 +210,10 @@ public class StreamMarkdownPanel extends JPanel {
                         doc.setText(newText);
                     }
                 });
+            }
+        } else if (newBlock.getType() == MarkdownBlock.Type.TOOL) {
+            if (component instanceof ToolCallPanel) {
+                ((ToolCallPanel) component).updateContent(newBlock.getToolName(), newBlock.getContent());
             }
         } else if (newBlock.getType() == MarkdownBlock.Type.THINK) {
             if (component instanceof JLabel) {
@@ -306,6 +325,90 @@ public class StreamMarkdownPanel extends JPanel {
                 int offset = editor.getCaretModel().getOffset();
                 doc.insertString(offset, text);
             });
+        }
+    }
+
+    private static class ToolCallPanel extends JPanel {
+        private final Project project;
+        private final JLabel titleLabel;
+        private final JLabel toggleLabel;
+        private final EditorTextField paramsField;
+        private final JPanel paramsWrapper;
+        private boolean collapsed = true;
+
+        ToolCallPanel(Project project, String toolName, String params) {
+            super(new BorderLayout());
+            this.project = project;
+            setBackground(UIUtil.getPanelBackground());
+            setBorder(JBUI.Borders.compound(
+                    JBUI.Borders.customLine(JBColor.border(), 1),
+                    JBUI.Borders.empty(6, 8)
+            ));
+
+            titleLabel = new JLabel(titleText(toolName));
+            titleLabel.setFont(UIUtil.getLabelFont().deriveFont(UIUtil.getFontSize(UIUtil.FontSize.SMALL)));
+            titleLabel.setForeground(UIUtil.getLabelForeground());
+
+            toggleLabel = new JLabel("Show params");
+            toggleLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+            toggleLabel.setForeground(UIUtil.getContextHelpForeground());
+            toggleLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            toggleLabel.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    setCollapsed(!collapsed);
+                }
+            });
+
+            JPanel header = new JPanel(new BorderLayout());
+            header.setBackground(UIUtil.getPanelBackground());
+            header.add(titleLabel, BorderLayout.WEST);
+            header.add(toggleLabel, BorderLayout.EAST);
+
+            paramsField = new EditorTextField("", project, PlainTextFileType.INSTANCE);
+            paramsField.setOneLineMode(false);
+            paramsField.setViewer(true);
+            paramsField.ensureWillComputePreferredSize();
+            paramsField.addSettingsProvider(editor -> {
+                editor.getSettings().setUseSoftWraps(true);
+                editor.getSettings().setLineNumbersShown(false);
+                editor.getSettings().setGutterIconsShown(false);
+                editor.setBackgroundColor(UIUtil.getPanelBackground());
+                editor.getScrollPane().setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER);
+                editor.getScrollPane().setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+            });
+            paramsField.setBorder(JBUI.Borders.empty(4, 0, 0, 0));
+
+            paramsWrapper = new JPanel(new BorderLayout());
+            paramsWrapper.setBackground(UIUtil.getPanelBackground());
+            paramsWrapper.add(paramsField, BorderLayout.CENTER);
+            paramsWrapper.setVisible(false);
+
+            add(header, BorderLayout.NORTH);
+            add(paramsWrapper, BorderLayout.CENTER);
+
+            updateContent(toolName, params);
+        }
+
+        void updateContent(String toolName, String params) {
+            titleLabel.setText(titleText(toolName));
+            WriteCommandAction.runWriteCommandAction(project, () -> {
+                Document doc = paramsField.getDocument();
+                doc.setText(params == null ? "" : params);
+            });
+        }
+
+        private void setCollapsed(boolean value) {
+            collapsed = value;
+            paramsWrapper.setVisible(!value);
+            toggleLabel.setText(value ? "Show params" : "Hide params");
+            revalidate();
+            repaint();
+        }
+
+        private String titleText(String toolName) {
+            String name = toolName == null || toolName.isBlank() ? "unknown" : toolName;
+            return "Tool call: " + name;
         }
     }
 
