@@ -1,9 +1,11 @@
 package cn.lacknb.blog.llm.stream;
 
 import com.intellij.icons.AllIcons;
+import com.intellij.openapi.command.CommandProcessor;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.fileTypes.FileType;
 import com.intellij.openapi.fileTypes.FileTypeManager;
 import com.intellij.openapi.fileTypes.PlainTextFileType;
@@ -20,6 +22,7 @@ import javax.swing.JEditorPane;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.ScrollPaneConstants;
+import javax.swing.JTextArea;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -37,12 +40,23 @@ import java.util.Objects;
 
 public class StreamMarkdownPanel extends JPanel {
     private final Project project;
-    private final StringBuilder fullBuffer = new StringBuilder();
     private final StringBuilder pendingBuffer = new StringBuilder();
     private final List<Component> blockComponents = new ArrayList<>();
     private final MarkdownRenderer renderer = new MarkdownRenderer();
-    private List<MarkdownBlock> currentBlocks = new ArrayList<>();
     private final Timer updateTimer;
+    private String pendingFragment = "";
+    private BlockMode mode = BlockMode.TEXT;
+    private String activeLanguage = "";
+    private StringBuilder activeBuffer = new StringBuilder();
+    private Component activeComponent;
+    private int activeIndex = -1;
+    private StringBuilder languageBuffer = new StringBuilder();
+    private final StringBuilder codePendingBuffer = new StringBuilder();
+    private final Timer codeFlushTimer;
+    private CodeBlockPanel flushTarget;
+    private static final int CODE_CHUNK_SIZE = 200;
+    private static final int CODE_FLUSH_INTERVAL_MS = 16;
+    private static final String CODE_COMMAND_GROUP = "LLM Stream Code";
 
     public StreamMarkdownPanel(Project project) {
         this.project = project;
@@ -50,6 +64,8 @@ public class StreamMarkdownPanel extends JPanel {
         setBackground(UIUtil.getPanelBackground());
         updateTimer = new Timer(80, e -> flushPending());
         updateTimer.setRepeats(true);
+        codeFlushTimer = new Timer(CODE_FLUSH_INTERVAL_MS, e -> flushCodePending(false));
+        codeFlushTimer.setRepeats(true);
     }
 
     public void appendText(String chunk) {
@@ -69,62 +85,332 @@ public class StreamMarkdownPanel extends JPanel {
         }
         String chunk = pendingBuffer.toString();
         pendingBuffer.setLength(0);
-        fullBuffer.append(chunk);
-        List<MarkdownBlock> newBlocks = StreamMarkdownParser.parse(fullBuffer.toString());
-        updateBlocks(newBlocks);
+        consumeChunk(chunk, false);
     }
 
-    private void updateBlocks(List<MarkdownBlock> newBlocks) {
-        boolean layoutChanged = false;
-        for (int i = 0; i < newBlocks.size(); i++) {
-            MarkdownBlock newBlock = newBlocks.get(i);
-            if (i < blockComponents.size()) {
-                MarkdownBlock oldBlock = currentBlocks.get(i);
-                boolean sameType = oldBlock.getType() == newBlock.getType();
-                boolean sameLanguage = Objects.equals(oldBlock.getLanguage(), newBlock.getLanguage());
-                if (sameType && (newBlock.getType() != MarkdownBlock.Type.CODE || sameLanguage)) {
-                    updateComponent(blockComponents.get(i), oldBlock, newBlock);
-                } else {
-                    remove(blockComponents.get(i));
-                    Component replacement = createComponent(newBlock);
-                    blockComponents.set(i, replacement);
-                    add(replacement, i);
-                    layoutChanged = true;
-                }
-            } else {
-                Component component = createComponent(newBlock);
-                blockComponents.add(component);
-                add(component);
-                layoutChanged = true;
+    public void finish() {
+        String chunk = pendingBuffer.toString();
+        pendingBuffer.setLength(0);
+        String data = pendingFragment + chunk;
+        pendingFragment = "";
+        if (!data.isEmpty()) {
+            consumeChunk(data, true);
+        }
+        if (!codeFlushTimer.isRunning() && codePendingBuffer.length() > 0) {
+            flushCodePending(true);
+        }
+        if (mode == BlockMode.CODE_LANG) {
+            activeLanguage = languageBuffer.toString().trim();
+            mode = BlockMode.CODE;
+            if (!activeLanguage.isBlank()) {
+                upgradeCodeEditor();
             }
         }
+    }
 
-        while (blockComponents.size() > newBlocks.size()) {
-            Component extra = blockComponents.remove(blockComponents.size() - 1);
-            remove(extra);
-            layoutChanged = true;
+    private void consumeChunk(String chunk, boolean force) {
+        if (chunk == null || chunk.isEmpty()) {
+            return;
         }
+        String data = pendingFragment + chunk;
+        pendingFragment = "";
+        int index = 0;
+        while (index < data.length()) {
+            if (mode == BlockMode.TEXT) {
+                int codeIndex = data.indexOf("```", index);
+                int thinkIndex = data.indexOf("<think>", index);
+                int next = nextDelimiter(codeIndex, thinkIndex);
+                if (next == -1) {
+                    if (force) {
+                        appendTextBlock(data.substring(index));
+                        return;
+                    }
+                    int tail = Math.min(7, data.length() - index);
+                    if (data.length() - index <= 7) {
+                        pendingFragment = data.substring(index);
+                        return;
+                    }
+                    appendTextBlock(data.substring(index, data.length() - tail));
+                    pendingFragment = data.substring(data.length() - tail);
+                    return;
+                }
+                if (next > index) {
+                    appendTextBlock(data.substring(index, next));
+                }
+                if (next == codeIndex) {
+                    activeLanguage = "";
+                    switchToCode();
+                    mode = BlockMode.CODE_LANG;
+                    languageBuffer.setLength(0);
+                    index = codeIndex + 3;
+                    continue;
+                }
+                if (next == thinkIndex) {
+                    switchToThink();
+                    index = next + "<think>".length();
+                    continue;
+                }
+            } else if (mode == BlockMode.CODE_LANG) {
+                if (index >= data.length()) {
+                    return;
+                }
+                char c = data.charAt(index);
+                if (c == '\n' || c == '\r') {
+                    activeLanguage = languageBuffer.toString().trim();
+                    mode = BlockMode.CODE;
+                    if (!activeLanguage.isBlank()) {
+                        upgradeCodeEditor();
+                    }
+                    if (c == '\r' && index + 1 < data.length() && data.charAt(index + 1) == '\n') {
+                        index += 2;
+                    } else {
+                        index += 1;
+                    }
+                    continue;
+                }
+                if (isLanguageChar(c)) {
+                    languageBuffer.append(c);
+                    index += 1;
+                    continue;
+                }
+                activeLanguage = languageBuffer.toString().trim();
+                mode = BlockMode.CODE;
+                if (!activeLanguage.isBlank()) {
+                    upgradeCodeEditor();
+                }
+            } else if (mode == BlockMode.CODE) {
+                int codeIndex = data.indexOf("```", index);
+                if (codeIndex == -1) {
+                    if (force) {
+                        appendCode(data.substring(index));
+                        return;
+                    }
+                    int tail = Math.min(2, data.length() - index);
+                    if (data.length() - index <= 2) {
+                        pendingFragment = data.substring(index);
+                        return;
+                    }
+                    appendCode(data.substring(index, data.length() - tail));
+                    pendingFragment = data.substring(data.length() - tail);
+                    return;
+                }
+                if (codeIndex > index) {
+                    appendCode(data.substring(index, codeIndex));
+                }
+                finishCodeBlock();
+                index = codeIndex + 3;
+            } else if (mode == BlockMode.THINK) {
+                int thinkEnd = data.indexOf("</think>", index);
+                if (thinkEnd == -1) {
+                    if (force) {
+                        appendThink(data.substring(index));
+                        return;
+                    }
+                    int tail = Math.min(7, data.length() - index);
+                    if (data.length() - index <= 7) {
+                        pendingFragment = data.substring(index);
+                        return;
+                    }
+                    appendThink(data.substring(index, data.length() - tail));
+                    pendingFragment = data.substring(data.length() - tail);
+                    return;
+                }
+                if (thinkEnd > index) {
+                    appendThink(data.substring(index, thinkEnd));
+                }
+                finishThink();
+                index = thinkEnd + "</think>".length();
+            }
+        }
+    }
 
-        currentBlocks = newBlocks;
-        if (layoutChanged) {
-            revalidate();
+    private int nextDelimiter(int codeIndex, int thinkIndex) {
+        if (codeIndex == -1) {
+            return thinkIndex;
         }
+        if (thinkIndex == -1) {
+            return codeIndex;
+        }
+        return Math.min(codeIndex, thinkIndex);
+    }
+
+    private boolean isLanguageChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '+' || c == '#' || c == '.' || c == '-';
+    }
+
+    private void switchToText() {
+        mode = BlockMode.TEXT;
+        activeLanguage = "";
+        activeBuffer = new StringBuilder();
+        activeComponent = createTextComponent("");
+        activeIndex = blockComponents.size();
+        blockComponents.add(activeComponent);
+        add(activeComponent);
+        revalidate();
+    }
+
+    private void switchToCode() {
+        mode = BlockMode.CODE;
+        activeBuffer = new StringBuilder();
+        activeComponent = createStreamingCodeComponent(new MarkdownBlock(MarkdownBlock.Type.CODE, "", activeLanguage, false));
+        activeIndex = blockComponents.size();
+        blockComponents.add(activeComponent);
+        add(activeComponent);
+        revalidate();
+    }
+
+    private void switchToThink() {
+        mode = BlockMode.THINK;
+        activeBuffer = new StringBuilder();
+        JLabel thinkLabel = new JLabel(renderer.toHtml("*" + "" + "*"));
+        thinkLabel.setForeground(JBColor.GRAY);
+        thinkLabel.setBorder(JBUI.Borders.empty(4, 8));
+        thinkLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        activeComponent = thinkLabel;
+        activeIndex = blockComponents.size();
+        blockComponents.add(activeComponent);
+        add(activeComponent);
+        revalidate();
+    }
+
+    private void appendTextBlock(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        if (mode != BlockMode.TEXT || activeComponent == null) {
+            switchToText();
+        }
+        activeBuffer.append(text);
+        if (activeComponent instanceof JEditorPane) {
+            ((JEditorPane) activeComponent).setText(renderer.toHtml(activeBuffer.toString()));
+            activeComponent.revalidate();
+        }
+    }
+
+    private void appendCode(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        if (mode != BlockMode.CODE || activeComponent == null) {
+            switchToCode();
+        }
+        activeBuffer.append(text);
+        if (activeComponent instanceof StreamingCodePanel) {
+            ((StreamingCodePanel) activeComponent).appendText(text);
+            activeComponent.revalidate();
+        } else if (activeComponent instanceof CodeBlockPanel) {
+            enqueueCode((CodeBlockPanel) activeComponent, text);
+        }
+    }
+
+    private void appendThink(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        if (mode != BlockMode.THINK || activeComponent == null) {
+            switchToThink();
+        }
+        activeBuffer.append(text);
+        if (activeComponent instanceof JLabel) {
+            ((JLabel) activeComponent).setText(renderer.toHtml("*" + activeBuffer + "*"));
+            activeComponent.revalidate();
+        }
+    }
+
+    private void finishCodeBlock() {
+        if (activeComponent instanceof StreamingCodePanel) {
+            String content = activeBuffer.toString();
+            MarkdownBlock block = new MarkdownBlock(MarkdownBlock.Type.CODE, content, activeLanguage, true);
+            Component replacement = createCodeComponent(block);
+            remove(activeComponent);
+            blockComponents.set(activeIndex, replacement);
+            add(replacement, activeIndex);
+        } else if (activeComponent instanceof CodeBlockPanel) {
+            flushTarget = (CodeBlockPanel) activeComponent;
+            if (codePendingBuffer.length() >= CODE_CHUNK_SIZE && !codeFlushTimer.isRunning()) {
+                codeFlushTimer.start();
+            } else if (codePendingBuffer.length() > 0 && !codeFlushTimer.isRunning()) {
+                flushCodePending(true);
+            }
+        }
+        activeComponent = null;
+        activeIndex = -1;
+        activeBuffer = new StringBuilder();
+        mode = BlockMode.TEXT;
+        activeLanguage = "";
+        revalidate();
         repaint();
     }
 
-    private Component createComponent(MarkdownBlock block) {
-        switch (block.getType()) {
-            case CODE:
-                return createCodeComponent(block);
-            case THINK:
-                JLabel thinkLabel = new JLabel(renderer.toHtml("*" + block.getContent() + "*"));
-                thinkLabel.setForeground(JBColor.GRAY);
-                thinkLabel.setBorder(JBUI.Borders.empty(4, 8));
-                thinkLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-                return thinkLabel;
-            default:
-                return createTextComponent(block.getContent());
+    private void upgradeCodeEditor() {
+        if (!(activeComponent instanceof StreamingCodePanel)) {
+            return;
         }
+        String content = activeBuffer.toString();
+        MarkdownBlock block = new MarkdownBlock(MarkdownBlock.Type.CODE, content, activeLanguage, false);
+        Component replacement = createCodeComponent(block);
+        remove(activeComponent);
+        blockComponents.set(activeIndex, replacement);
+        add(replacement, activeIndex);
+        activeComponent = replacement;
+        revalidate();
+        repaint();
+    }
+
+    private void enqueueCode(CodeBlockPanel panel, String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        flushTarget = panel;
+        codePendingBuffer.append(text);
+        if (codePendingBuffer.length() < CODE_CHUNK_SIZE) {
+            if (!codeFlushTimer.isRunning()) {
+                flushCodePending(true);
+            }
+            return;
+        }
+        if (!codeFlushTimer.isRunning()) {
+            codeFlushTimer.start();
+        }
+    }
+
+    private void flushCodePending(boolean drainAll) {
+        if (flushTarget == null) {
+            codeFlushTimer.stop();
+            codePendingBuffer.setLength(0);
+            return;
+        }
+        if (codePendingBuffer.length() == 0) {
+            codeFlushTimer.stop();
+            flushTarget = null;
+            return;
+        }
+        int len = drainAll ? codePendingBuffer.length() : Math.min(CODE_CHUNK_SIZE, codePendingBuffer.length());
+        String text = codePendingBuffer.substring(0, len);
+        codePendingBuffer.delete(0, len);
+        appendToEditor(flushTarget, text);
+        if (!drainAll && codePendingBuffer.length() == 0) {
+            codeFlushTimer.stop();
+            flushTarget = null;
+        }
+    }
+
+    private void appendToEditor(CodeBlockPanel panel, String text) {
+        EditorTextField editorTextField = panel.getEditorTextField();
+        CommandProcessor.getInstance().runUndoTransparentAction(() ->
+                WriteCommandAction.runWriteCommandAction(project, CODE_COMMAND_GROUP, null, () -> {
+                    Document doc = editorTextField.getDocument();
+                    doc.insertString(doc.getTextLength(), text);
+                })
+        );
+    }
+
+    private void finishThink() {
+        activeComponent = null;
+        activeIndex = -1;
+        activeBuffer = new StringBuilder();
+        mode = BlockMode.TEXT;
+        revalidate();
     }
 
     private Component createTextComponent(String text) {
@@ -179,30 +465,11 @@ public class StreamMarkdownPanel extends JPanel {
         return wrapper;
     }
 
-    private void updateComponent(Component component, MarkdownBlock oldBlock, MarkdownBlock newBlock) {
-        if (newBlock.getType() == MarkdownBlock.Type.CODE) {
-            if (component instanceof CodeBlockPanel) {
-                CodeBlockPanel wrapper = (CodeBlockPanel) component;
-                wrapper.updateLanguage(newBlock.getLanguage());
-                EditorTextField editorTextField = wrapper.getEditorTextField();
-                WriteCommandAction.runWriteCommandAction(project, () -> {
-                    Document doc = editorTextField.getDocument();
-                    String oldText = oldBlock.getContent();
-                    String newText = newBlock.getContent();
-                    if (newText.startsWith(oldText)) {
-                        doc.insertString(doc.getTextLength(), newText.substring(oldText.length()));
-                    } else {
-                        doc.setText(newText);
-                    }
-                });
-            }
-        } else if (newBlock.getType() == MarkdownBlock.Type.THINK) {
-            if (component instanceof JLabel) {
-                ((JLabel) component).setText(renderer.toHtml("*" + newBlock.getContent() + "*"));
-            }
-        } else if (component instanceof JEditorPane) {
-            ((JEditorPane) component).setText(renderer.toHtml(newBlock.getContent()));
-        }
+    private Component createStreamingCodeComponent(MarkdownBlock block) {
+        StreamingCodePanel panel = new StreamingCodePanel(block.getContent());
+        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        return panel;
     }
 
     private static class CodeBlockPanel extends JPanel {
@@ -307,6 +574,51 @@ public class StreamMarkdownPanel extends JPanel {
                 doc.insertString(offset, text);
             });
         }
+    }
+
+    private static class StreamingCodePanel extends JPanel {
+        private final JTextArea textArea;
+
+        StreamingCodePanel(String text) {
+            super(new BorderLayout());
+            setBackground(UIUtil.getPanelBackground());
+            setBorder(JBUI.Borders.compound(
+                    JBUI.Borders.empty(4, 8),
+                    JBUI.Borders.customLine(JBColor.border(), 1)
+            ));
+
+            textArea = new JTextArea(text == null ? "" : text);
+            textArea.setEditable(false);
+            textArea.setLineWrap(true);
+            textArea.setWrapStyleWord(true);
+            textArea.setOpaque(false);
+            textArea.setBorder(JBUI.Borders.empty(4, 6));
+            String fontName = EditorColorsManager.getInstance()
+                    .getGlobalScheme()
+                    .getEditorFontName();
+            int fontSize = EditorColorsManager.getInstance()
+                    .getGlobalScheme()
+                    .getEditorFontSize();
+            textArea.setFont(new java.awt.Font(fontName, java.awt.Font.PLAIN, fontSize));
+            add(textArea, BorderLayout.CENTER);
+        }
+
+        void appendText(String more) {
+            if (more != null && !more.isEmpty()) {
+                textArea.append(more);
+            }
+        }
+
+        void setText(String text) {
+            textArea.setText(text == null ? "" : text);
+        }
+    }
+
+    private enum BlockMode {
+        TEXT,
+        CODE_LANG,
+        CODE,
+        THINK
     }
 
     private static class WidthTrackingHtmlPane extends JEditorPane {
