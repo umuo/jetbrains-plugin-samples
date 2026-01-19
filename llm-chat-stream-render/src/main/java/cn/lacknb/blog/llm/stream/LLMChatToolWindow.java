@@ -260,6 +260,7 @@ public class LLMChatToolWindow {
                     if (requestId != activeRequestId) {
                         return;
                     }
+                    assistantPanel.finish();
                     setStreaming(false);
                 });
             }
@@ -276,6 +277,7 @@ public class LLMChatToolWindow {
                         return;
                     }
                     assistantPanel.appendText("\n\n" + message);
+                    assistantPanel.finish();
                     requestAutoScroll();
                     setStreaming(false);
                 });
