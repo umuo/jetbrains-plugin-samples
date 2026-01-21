@@ -8,7 +8,7 @@ public class MarkdownBlock {
     private final Type type;
     private final String content;
     private final String language;
-    private final String toolName;
+    private String toolName;
     private final boolean completed;
 
     public MarkdownBlock(Type type, String content, String language, String toolName, boolean completed) {
@@ -16,6 +16,13 @@ public class MarkdownBlock {
         this.content = content;
         this.language = language;
         this.toolName = toolName;
+        this.completed = completed;
+    }
+
+    public MarkdownBlock(Type type, String content, String language, boolean completed) {
+        this.type = type;
+        this.content = content;
+        this.language = language;
         this.completed = completed;
     }
 

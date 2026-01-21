@@ -1,10 +1,16 @@
+
 plugins {
     id 'java'
     id 'org.jetbrains.intellij' version '1.15.0'
 }
 
+configurations {
+    proguard
+}
+
+
 group = 'cn.lacknb.blog'
-version = '1.0-SNAPSHOT'
+version = '1.0.1'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -24,7 +30,19 @@ tasks {
         Initial version of the plugin
         """
         sinceBuild = '222'
-        untilBuild = '222.*'
+//        untilBuild = '222.*'
+    }
+}
+
+tasks.buildPlugin {
+    dependsOn("obfuscateJar")
+
+    exclude("lib/${project.name}.jar")
+    exclude("lib/instrumented-${project.name}-${project.version}.jar")
+
+    from("build/obfuscated/${project.name}-obf.jar") {
+        into("lib")
+        rename { _ -> "instrumented-${project.name}-${project.version}.jar" }
     }
 }
 
@@ -33,6 +51,26 @@ dependencies {
     implementation 'org.commonmark:commonmark:0.22.0'
     testImplementation platform('org.junit:junit-bom:5.9.1')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    proguard "com.guardsquare:proguard-base:7.4.2"
+
+}
+
+task obfuscateJar(type: JavaExec) {
+    dependsOn instrumentedJar
+    classpath = configurations.proguard
+    mainClass = "proguard.ProGuard"
+
+    def inJar  = instrumentedJar.archiveFile.get().asFile
+    def outJar = file("$buildDir/obfuscated/${project.name}-obf.jar")
+    def jmodDir = file("${System.getProperty('java.home')}/jmods")
+    def jmodFiles = fileTree(jmodDir).matching { include("*.jmod") }
+    def libraryJars = files(jmodFiles, configurations.compileClasspath)
+    outJar.parentFile.mkdirs()
+
+    args "-injars", inJar.absolutePath,
+            "-outjars", outJar.absolutePath,
+            "-libraryjars", libraryJars.asPath,
+            "@${project.projectDir}/proguard-rules.pro"
 }
 
 test {

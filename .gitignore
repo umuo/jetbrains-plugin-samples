@@ -41,3 +41,4 @@ bin/
 
 # local LLM config (contains secrets)
 .llm-chat-stream-render.json
+.codeartsdoer
