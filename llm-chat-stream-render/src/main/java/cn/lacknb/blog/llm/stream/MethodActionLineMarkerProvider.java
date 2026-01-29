@@ -28,6 +28,11 @@ import java.util.List;
 import java.util.Set;
 
 public class MethodActionLineMarkerProvider extends LineMarkerProviderDescriptor implements DumbAware {
+
+    public MethodActionLineMarkerProvider() {
+        super();
+    }
+
     @Override
     public @Nullable LineMarkerInfo<?> getLineMarkerInfo(@NotNull PsiElement element) {
         return null;

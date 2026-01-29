@@ -8,6 +8,10 @@ import com.intellij.ui.content.ContentFactory;
 import org.jetbrains.annotations.NotNull;
 
 public class LLMChatToolWindowFactory implements ToolWindowFactory {
+
+    public LLMChatToolWindowFactory() {
+    }
+
     @Override
     public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
         LLMChatToolWindow window = new LLMChatToolWindow(project);

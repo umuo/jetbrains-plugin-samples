@@ -1,3 +1,13 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.guardsquare:proguard-gradle:7.4.0'
+    }
+}
+
 
 plugins {
     id 'java'
@@ -37,12 +47,30 @@ tasks {
 tasks.buildPlugin {
     dependsOn("obfuscateJar")
 
-    exclude("lib/${project.name}.jar")
-    exclude("lib/instrumented-${project.name}-${project.version}.jar")
+    // --- 核心修复：更强力的排除逻辑 ---
+    exclude { details ->
+        // 1. 只检查 lib 目录下的文件
+        if (!details.path.startsWith("lib/")) {
+            return false
+        }
 
-    from("build/obfuscated/${project.name}-obf.jar") {
+        def name = details.file.name
+        // 2. 只要文件名包含项目名，且是以 .jar 结尾，一律踢掉！
+        // 这样既能杀掉 "llm-chat-stream-render-1.0.1.jar"
+        // 也能杀掉 "instrumented-llm-chat-stream-render-1.0.1.jar"
+        // (前提是你的混淆 jar 名字不要和这些撞车，我们下面会重命名)
+        if (name.contains(project.name) && name.endsWith(".jar")) {
+            return true // 返回 true 表示排除该文件
+        }
+
+        return false
+    }
+    // --- 放入混淆后的 Jar ---
+    from("$buildDir/obfuscated/${project.name}-obf.jar") {
         into("lib")
-        rename { _ -> "instrumented-${project.name}-${project.version}.jar" }
+        // 重命名为最标准的名字：项目名-版本号.jar
+        // 这样 IDEA 加载时最干净
+        rename { "${project.name}-${project.version}.jar" }
     }
 }
 
@@ -51,26 +79,66 @@ dependencies {
     implementation 'org.commonmark:commonmark:0.22.0'
     testImplementation platform('org.junit:junit-bom:5.9.1')
     testImplementation 'org.junit.jupiter:junit-jupiter'
-    proguard "com.guardsquare:proguard-base:7.4.2"
-
 }
+// 引入类
+import proguard.gradle.ProGuardTask
 
-task obfuscateJar(type: JavaExec) {
-    dependsOn instrumentedJar
-    classpath = configurations.proguard
-    mainClass = "proguard.ProGuard"
+tasks.register('obfuscateJar', ProGuardTask) {
+//    dependsOn instrumentedJar
+    dependsOn jar
 
-    def inJar  = instrumentedJar.archiveFile.get().asFile
-    def outJar = file("$buildDir/obfuscated/${project.name}-obf.jar")
-    def jmodDir = file("${System.getProperty('java.home')}/jmods")
-    def jmodFiles = fileTree(jmodDir).matching { include("*.jmod") }
-    def libraryJars = files(jmodFiles, configurations.compileClasspath)
-    outJar.parentFile.mkdirs()
+    // 插件不需要这一堆 args，直接调方法配置
+    configuration 'proguard-rules.pro'
 
-    args "-injars", inJar.absolutePath,
-            "-outjars", outJar.absolutePath,
-            "-libraryjars", libraryJars.asPath,
-            "@${project.projectDir}/proguard-rules.pro"
+//    injars instrumentedJar.archiveFile
+    injars jar.archiveFile
+    outjars "$buildDir/obfuscated/${project.name}-obf.jar"
+
+    // 插件会自动处理这几百个 jar，不会截断
+    libraryjars sourceSets.main.compileClasspath
+
+    // 补上 JDK 环境
+    if (System.getProperty('java.version').startsWith('1.')) {
+        libraryjars "${System.getProperty('java.home')}/lib/rt.jar"
+    } else {
+        libraryjars "${System.getProperty('java.home')}/jmods/java.base.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        libraryjars "${System.getProperty('java.home')}/jmods/java.desktop.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+    }
+
+    doFirst {
+        def javaHome = System.getProperty('java.home')
+
+        // 1. 基础模块 (必须)
+        libraryjars "${javaHome}/jmods/java.base.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+
+        // 2. UI 模块 (解决 java.awt.*, javax.swing.*)
+        libraryjars "${javaHome}/jmods/java.desktop.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+
+        // 3. 【本次修复关键】HTTP 模块 (解决 java.net.http.HttpClient)
+        // 如果你的文件不存在，请检查你的 JDK 版本是否 >= 11
+        if (file("${javaHome}/jmods/java.net.http.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.net.http.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        // 4. 【本次修复关键】数据传输模块 (解决 java.awt.datatransfer.Clipboard)
+        // Clipboard 类其实是在 java.datatransfer 模块中定义的
+        if (file("${javaHome}/jmods/java.datatransfer.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.datatransfer.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        // 5. XML 解析 (解决 org.w3c.dom.* 等警告，插件开发常用)
+        if (file("${javaHome}/jmods/java.xml.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.xml.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        // 6. 日志与管理 (可选，视警告情况而定)
+        if (file("${javaHome}/jmods/java.logging.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.logging.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        // 7. 打印当前的 JDK 路径，方便调试确认用了哪个 JDK
+        println "ProGuard using JDK libs from: ${javaHome}"
+    }
 }
 
 test {
