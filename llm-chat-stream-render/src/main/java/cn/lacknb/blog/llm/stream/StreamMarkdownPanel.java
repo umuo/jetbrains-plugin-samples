@@ -5,6 +5,7 @@ import com.intellij.openapi.command.CommandProcessor;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.fileTypes.FileType;
 import com.intellij.openapi.fileTypes.FileTypeManager;
@@ -435,12 +436,17 @@ public class StreamMarkdownPanel extends JPanel {
 
     private void appendToEditor(CodeBlockPanel panel, String text) {
         EditorTextField editorTextField = panel.getEditorTextField();
-        CommandProcessor.getInstance().runUndoTransparentAction(() ->
-                WriteCommandAction.runWriteCommandAction(project, CODE_COMMAND_GROUP, null, () -> {
-                    Document doc = editorTextField.getDocument();
-                    doc.insertString(doc.getTextLength(), text);
-                })
-        );
+        Runnable writeTask = () -> {
+            Document doc = editorTextField.getDocument();
+            doc.insertString(doc.getTextLength(), text);
+        };
+        if (ApplicationManager.getApplication().isDispatchThread()) {
+            WriteCommandAction.runWriteCommandAction(project, CODE_COMMAND_GROUP, CODE_COMMAND_GROUP, writeTask);
+        } else {
+            CommandProcessor.getInstance().runUndoTransparentAction(() ->
+                    WriteCommandAction.runWriteCommandAction(project, CODE_COMMAND_GROUP, CODE_COMMAND_GROUP, writeTask)
+            );
+        }
     }
 
     private void finishThink() {

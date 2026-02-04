@@ -12,7 +12,7 @@
 # -dontpreverify
 # 明确告诉 ProGuard 目标 Java 版本 (IDEA 插件通常是 11, 17 或 21)
 # 这能确保生成的 StackMapTable 格式是正确的
--target 17
+-target 11
 
 # 告诉 ProGuard：虽然有警告，但请继续干活，不要停！
 # -ignorewarnings
@@ -46,7 +46,7 @@
 
 # --- 【核弹测试】 ---
 # 暂时无条件保留你的包下所有类和成员，先确保能跑起来！
--keep class cn.lacknb.blog.llm.** { *; }
+#-keep class cn.lacknb.blog.llm.** { *; }
 
 
 
