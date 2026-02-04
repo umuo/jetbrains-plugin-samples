@@ -57,6 +57,7 @@ public class StreamMarkdownPanel extends JPanel {
     private static final int CODE_CHUNK_SIZE = 200;
     private static final int CODE_FLUSH_INTERVAL_MS = 16;
     private static final String CODE_COMMAND_GROUP = "LLM Stream Code";
+    private static final int DELIMITER_TAIL = 12;
 
     public StreamMarkdownPanel(Project project) {
         this.project = project;
@@ -117,16 +118,16 @@ public class StreamMarkdownPanel extends JPanel {
         int index = 0;
         while (index < data.length()) {
             if (mode == BlockMode.TEXT) {
-                int codeIndex = data.indexOf("```", index);
-                int thinkIndex = data.indexOf("<think>", index);
+                int codeIndex = findFenceIndex(data, index);
+                int thinkIndex = findThinkIndex(data, index, "<think>");
                 int next = nextDelimiter(codeIndex, thinkIndex);
                 if (next == -1) {
                     if (force) {
                         appendTextBlock(data.substring(index));
                         return;
                     }
-                    int tail = Math.min(7, data.length() - index);
-                    if (data.length() - index <= 7) {
+                    int tail = Math.min(DELIMITER_TAIL, data.length() - index);
+                    if (data.length() - index <= DELIMITER_TAIL) {
                         pendingFragment = data.substring(index);
                         return;
                     }
@@ -179,14 +180,14 @@ public class StreamMarkdownPanel extends JPanel {
                     upgradeCodeEditor();
                 }
             } else if (mode == BlockMode.CODE) {
-                int codeIndex = data.indexOf("```", index);
+                int codeIndex = findFenceIndex(data, index);
                 if (codeIndex == -1) {
                     if (force) {
                         appendCode(data.substring(index));
                         return;
                     }
-                    int tail = Math.min(2, data.length() - index);
-                    if (data.length() - index <= 2) {
+                    int tail = Math.min(DELIMITER_TAIL, data.length() - index);
+                    if (data.length() - index <= DELIMITER_TAIL) {
                         pendingFragment = data.substring(index);
                         return;
                     }
@@ -200,14 +201,14 @@ public class StreamMarkdownPanel extends JPanel {
                 finishCodeBlock();
                 index = codeIndex + 3;
             } else if (mode == BlockMode.THINK) {
-                int thinkEnd = data.indexOf("</think>", index);
+                int thinkEnd = findThinkIndex(data, index, "</think>");
                 if (thinkEnd == -1) {
                     if (force) {
                         appendThink(data.substring(index));
                         return;
                     }
-                    int tail = Math.min(7, data.length() - index);
-                    if (data.length() - index <= 7) {
+                    int tail = Math.min(DELIMITER_TAIL, data.length() - index);
+                    if (data.length() - index <= DELIMITER_TAIL) {
                         pendingFragment = data.substring(index);
                         return;
                     }
@@ -232,6 +233,43 @@ public class StreamMarkdownPanel extends JPanel {
             return codeIndex;
         }
         return Math.min(codeIndex, thinkIndex);
+    }
+
+    private int findFenceIndex(String data, int from) {
+        int len = data.length();
+        for (int i = Math.max(0, from); i + 3 <= len; i++) {
+            if (data.charAt(i) == '`' && data.startsWith("```", i) && isLineStartWithIndent(data, i)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int findThinkIndex(String data, int from, String tag) {
+        int idx = data.indexOf(tag, from);
+        while (idx != -1) {
+            if (isLineStartWithIndent(data, idx)) {
+                return idx;
+            }
+            idx = data.indexOf(tag, idx + 1);
+        }
+        return -1;
+    }
+
+    private boolean isLineStartWithIndent(String data, int index) {
+        int i = index - 1;
+        while (i >= 0) {
+            char c = data.charAt(i);
+            if (c == '\n' || c == '\r') {
+                return true;
+            }
+            if (c == ' ' || c == '\t') {
+                i--;
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     private boolean isLanguageChar(char c) {
