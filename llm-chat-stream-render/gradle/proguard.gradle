@@ -1,0 +1,78 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.guardsquare:proguard-gradle:7.4.0'
+    }
+}
+
+import proguard.gradle.ProGuardTask
+
+tasks.buildPlugin {
+    dependsOn("obfuscateJar")
+
+    exclude { details ->
+        if (!details.path.startsWith("lib/")) {
+            return false
+        }
+
+        def name = details.file.name
+        if (name.contains(project.name) && name.endsWith(".jar")) {
+            return true
+        }
+
+        return false
+    }
+
+    from("$buildDir/obfuscated/${project.name}-obf.jar") {
+        into("lib")
+        rename { "${project.name}-${project.version}.jar" }
+    }
+}
+
+tasks.register('obfuscateJar', ProGuardTask) {
+//    dependsOn instrumentedJar
+    dependsOn tasks.named('encryptedJar')
+
+    configuration 'proguard-rules.pro'
+
+//    injars instrumentedJar.archiveFile
+    injars tasks.named('encryptedJar').flatMap { it.archiveFile }
+    outjars "$buildDir/obfuscated/${project.name}-obf.jar"
+
+    libraryjars sourceSets.main.compileClasspath
+
+    if (System.getProperty('java.version').startsWith('1.')) {
+        libraryjars "${System.getProperty('java.home')}/lib/rt.jar"
+    } else {
+        libraryjars "${System.getProperty('java.home')}/jmods/java.base.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        libraryjars "${System.getProperty('java.home')}/jmods/java.desktop.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+    }
+
+    doFirst {
+        def javaHome = System.getProperty('java.home')
+
+        libraryjars "${javaHome}/jmods/java.base.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        libraryjars "${javaHome}/jmods/java.desktop.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+
+        if (file("${javaHome}/jmods/java.net.http.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.net.http.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        if (file("${javaHome}/jmods/java.datatransfer.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.datatransfer.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        if (file("${javaHome}/jmods/java.xml.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.xml.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        if (file("${javaHome}/jmods/java.logging.jmod").exists()) {
+            libraryjars "${javaHome}/jmods/java.logging.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+        }
+
+        println "ProGuard using JDK libs from: ${javaHome}"
+    }
+}
