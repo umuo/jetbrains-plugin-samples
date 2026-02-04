@@ -8,6 +8,7 @@ buildscript {
     }
 }
 
+import groovy.json.JsonSlurper
 
 plugins {
     id 'java'
@@ -79,6 +80,82 @@ dependencies {
     implementation 'org.commonmark:commonmark:0.22.0'
     testImplementation platform('org.junit:junit-bom:5.9.1')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+def embeddedConfigOutputDir = file("$buildDir/generated/sources/llmConfig/java")
+def embeddedConfigFile = project.findProperty("llmConfigFile") ?
+        file(project.property("llmConfigFile")) :
+        rootProject.file(".llm-chat-stream-render.json")
+
+sourceSets {
+    main {
+        java {
+            srcDir embeddedConfigOutputDir
+        }
+    }
+}
+
+tasks.register('generateEmbeddedLlmConfig') {
+    inputs.file(embeddedConfigFile).optional()
+    outputs.dir(embeddedConfigOutputDir)
+    doLast {
+        embeddedConfigOutputDir.mkdirs()
+        def outputFile = new File(embeddedConfigOutputDir, "cn/lacknb/blog/llm/stream/EmbeddedLLMConfig.java")
+        outputFile.parentFile.mkdirs()
+
+        def configPresent = embeddedConfigFile.exists()
+        def parsed = configPresent ? new JsonSlurper().parse(embeddedConfigFile) : [:]
+        def baseUrl = parsed?.baseUrl
+        def apiKey = parsed?.apiKey
+        def model = parsed?.model
+
+        def encode = { String value ->
+            if (value == null) {
+                return ""
+            }
+            return value.getBytes("UTF-8").encodeBase64().toString()
+        }
+
+        def baseUrlB64 = encode(baseUrl)
+        def apiKeyB64 = encode(apiKey)
+        def modelB64 = encode(model)
+
+        outputFile.text = """
+package cn.lacknb.blog.llm.stream;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
+final class EmbeddedLLMConfig {
+    private static final boolean PRESENT = ${configPresent};
+
+    private EmbeddedLLMConfig() {
+    }
+
+    static LLMConfig load() {
+        if (!PRESENT) {
+            return null;
+        }
+        return new LLMConfig(
+                d("${baseUrlB64}"),
+                d("${apiKeyB64}"),
+                d("${modelB64}")
+        );
+    }
+
+    private static String d(String value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+    }
+}
+""".stripIndent()
+    }
+}
+
+tasks.named('compileJava') {
+    dependsOn(tasks.named('generateEmbeddedLlmConfig'))
 }
 // 引入类
 import proguard.gradle.ProGuardTask

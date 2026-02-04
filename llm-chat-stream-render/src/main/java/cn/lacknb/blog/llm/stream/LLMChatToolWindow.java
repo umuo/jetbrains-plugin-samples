@@ -104,7 +104,7 @@ public class LLMChatToolWindow {
         scrollTimer.setRepeats(true);
         String tip = "Hello! Ask a question below. Markdown and code blocks are supported.";
         if (config == null) {
-            tip += "\n\nTip: set OPENAI_API_KEY or create .llm-chat-stream-render.json in the project root (or set LLM_CONFIG_PATH).";
+            tip += "\n\nTip: set OPENAI_API_KEY or rebuild the plugin with an embedded config.";
         }
         addAssistantInfo(tip, false);
     }

@@ -43,7 +43,7 @@ public class OpenAIChatService {
     public StreamSession streamChatCompletion(List<ChatMessage> messages, StreamHandler handler) {
         if (apiKey == null || apiKey.isBlank()) {
             handler.onError(new IllegalStateException(
-                    "Missing API key. Set OPENAI_API_KEY or create .llm-chat-stream-render.json (or set LLM_CONFIG_PATH)."
+                    "Missing API key. Set OPENAI_API_KEY or rebuild the plugin with an embedded config."
             ));
             return StreamSession.noop();
         }
