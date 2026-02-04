@@ -109,25 +109,73 @@ tasks.register('generateEmbeddedLlmConfig') {
         def apiKey = parsed?.apiKey
         def model = parsed?.model
 
-        def encode = { String value ->
-            if (value == null) {
-                return ""
+        def secureRandom = new java.security.SecureRandom()
+        def keyBytes = new byte[16]
+        secureRandom.nextBytes(keyBytes)
+
+        def encrypt = { String value, byte[] key, byte[] iv ->
+            if (value == null || value.isBlank()) {
+                return null
             }
-            return value.getBytes("UTF-8").encodeBase64().toString()
+            def cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            def keySpec = new javax.crypto.spec.SecretKeySpec(key, "AES")
+            def gcmSpec = new javax.crypto.spec.GCMParameterSpec(128, iv)
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
+            return cipher.doFinal(value.getBytes("UTF-8"))
         }
 
-        def baseUrlB64 = encode(baseUrl)
-        def apiKeyB64 = encode(apiKey)
-        def modelB64 = encode(model)
+        def toByteArrayLiteral = { byte[] bytes ->
+            if (bytes == null) {
+                return "null"
+            }
+            if (bytes.length == 0) {
+                return "new byte[0]"
+            }
+            def sb = new StringBuilder("new byte[] {")
+            for (int i = 0; i < bytes.length; i++) {
+                if (i > 0) {
+                    sb.append(", ")
+                }
+                sb.append("(byte) ").append(bytes[i])
+            }
+            sb.append("}")
+            return sb.toString()
+        }
+
+        def genIv = {
+            def iv = new byte[12]
+            secureRandom.nextBytes(iv)
+            return iv
+        }
+
+        def baseUrlIv = baseUrl != null ? genIv() : null
+        def apiKeyIv = apiKey != null ? genIv() : null
+        def modelIv = model != null ? genIv() : null
+
+        def baseUrlEnc = baseUrlIv != null ? encrypt(baseUrl, keyBytes, baseUrlIv) : null
+        def apiKeyEnc = apiKeyIv != null ? encrypt(apiKey, keyBytes, apiKeyIv) : null
+        def modelEnc = modelIv != null ? encrypt(model, keyBytes, modelIv) : null
+
+        def keyLiteral = toByteArrayLiteral(keyBytes)
+        def baseUrlIvLiteral = toByteArrayLiteral(baseUrlIv)
+        def apiKeyIvLiteral = toByteArrayLiteral(apiKeyIv)
+        def modelIvLiteral = toByteArrayLiteral(modelIv)
+        def baseUrlEncLiteral = toByteArrayLiteral(baseUrlEnc)
+        def apiKeyEncLiteral = toByteArrayLiteral(apiKeyEnc)
+        def modelEncLiteral = toByteArrayLiteral(modelEnc)
 
         outputFile.text = """
 package cn.lacknb.blog.llm.stream;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-
 final class EmbeddedLLMConfig {
     private static final boolean PRESENT = ${configPresent};
+    private static final byte[] KEY = ${keyLiteral};
+    private static final byte[] BASE_URL_IV = ${baseUrlIvLiteral};
+    private static final byte[] API_KEY_IV = ${apiKeyIvLiteral};
+    private static final byte[] MODEL_IV = ${modelIvLiteral};
+    private static final byte[] BASE_URL_DATA = ${baseUrlEncLiteral};
+    private static final byte[] API_KEY_DATA = ${apiKeyEncLiteral};
+    private static final byte[] MODEL_DATA = ${modelEncLiteral};
 
     private EmbeddedLLMConfig() {
     }
@@ -137,17 +185,17 @@ final class EmbeddedLLMConfig {
             return null;
         }
         return new LLMConfig(
-                d("${baseUrlB64}"),
-                d("${apiKeyB64}"),
-                d("${modelB64}")
+                d(BASE_URL_DATA, BASE_URL_IV),
+                d(API_KEY_DATA, API_KEY_IV),
+                d(MODEL_DATA, MODEL_IV)
         );
     }
 
-    private static String d(String value) {
-        if (value == null || value.isEmpty()) {
+    private static String d(byte[] data, byte[] iv) {
+        if (data == null || data.length == 0 || iv == null || iv.length == 0) {
             return null;
         }
-        return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+        return AesUtil.decryptToString(data, KEY, iv);
     }
 }
 """.stripIndent()
