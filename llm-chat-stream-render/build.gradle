@@ -5,6 +5,8 @@ buildscript {
     }
     dependencies {
         classpath 'com.guardsquare:proguard-gradle:7.4.0'
+        classpath 'org.ow2.asm:asm:9.7.1'
+        classpath 'org.ow2.asm:asm-tree:9.7.1'
     }
 }
 
@@ -205,18 +207,352 @@ final class EmbeddedLLMConfig {
 tasks.named('compileJava') {
     dependsOn(tasks.named('generateEmbeddedLlmConfig'))
 }
+
+def stringCryptoOutputDir = file("$buildDir/generated/sources/stringCrypto/java")
+def stringCryptoKeyFile = file("$buildDir/string-crypto/key.bin")
+def encryptedClassesDir = file("$buildDir/encrypted-classes")
+
+ext.stringEncryptConfig = [
+        enabled: true,
+        includePackages: ['cn.lacknb.blog.llm.stream'],
+        includeAnnotations: ['cn.lacknb.blog.llm.stream.EncryptStrings'],
+        excludeAnnotations: ['cn.lacknb.blog.llm.stream.NoStringEncrypt'],
+        excludeClasses: [
+                'cn.lacknb.blog.llm.stream.AesUtil',
+                'cn.lacknb.blog.llm.stream.StringDecryptor',
+                'cn.lacknb.blog.llm.stream.EmbeddedLLMConfig',
+                'cn.lacknb.blog.llm.stream.EncryptStrings',
+                'cn.lacknb.blog.llm.stream.NoStringEncrypt'
+        ]
+]
+
+sourceSets {
+    main {
+        java {
+            srcDir stringCryptoOutputDir
+        }
+    }
+}
+
+tasks.register('generateStringDecryptor') {
+    outputs.dir(stringCryptoOutputDir)
+    outputs.file(stringCryptoKeyFile)
+    doLast {
+        stringCryptoOutputDir.mkdirs()
+        stringCryptoKeyFile.parentFile.mkdirs()
+
+        def keyBytes = new byte[16]
+        new java.security.SecureRandom().nextBytes(keyBytes)
+        stringCryptoKeyFile.bytes = keyBytes
+
+        def keyLiteral = keyBytes.collect { "(byte) ${it}" }.join(", ")
+        def outputFile = new File(stringCryptoOutputDir, "cn/lacknb/blog/llm/stream/StringDecryptor.java")
+        outputFile.parentFile.mkdirs()
+        outputFile.text = """
+package cn.lacknb.blog.llm.stream;
+
+final class StringDecryptor {
+    private static final byte[] KEY = new byte[] { ${keyLiteral} };
+
+    private StringDecryptor() {
+    }
+
+    static String d(byte[] data, byte[] iv) {
+        return AesUtil.decryptToString(data, KEY, iv);
+    }
+}
+""".stripIndent()
+    }
+}
+
+tasks.named('compileJava') {
+    dependsOn(tasks.named('generateStringDecryptor'))
+}
+
+tasks.register('encryptStrings') {
+    dependsOn(tasks.named('compileJava'), tasks.named('processResources'))
+    inputs.dir(file("$buildDir/classes/java/main"))
+    inputs.file(stringCryptoKeyFile)
+    outputs.dir(encryptedClassesDir)
+    doLast {
+        if (!stringEncryptConfig.enabled) {
+            println "String encryption disabled."
+            return
+        }
+        if (!stringCryptoKeyFile.exists()) {
+            throw new GradleException("Missing string crypto key: ${stringCryptoKeyFile}")
+        }
+        def keyBytes = stringCryptoKeyFile.bytes
+        if (keyBytes == null || keyBytes.length == 0) {
+            throw new GradleException("Empty string crypto key: ${stringCryptoKeyFile}")
+        }
+
+        project.delete(encryptedClassesDir)
+        project.copy {
+            from("$buildDir/classes/java/main")
+            into(encryptedClassesDir)
+        }
+        project.copy {
+            from("$buildDir/resources/main")
+            into(encryptedClassesDir)
+        }
+
+        def includePackages = (stringEncryptConfig.includePackages ?: []).collect { it.replace('.', '/') }
+        def includeAnnDesc = (stringEncryptConfig.includeAnnotations ?: []).collect {
+            "L" + it.replace('.', '/') + ";"
+        } as Set
+        def excludeAnnDesc = (stringEncryptConfig.excludeAnnotations ?: []).collect {
+            "L" + it.replace('.', '/') + ";"
+        } as Set
+        def excludeClasses = (stringEncryptConfig.excludeClasses ?: []).collect { it.replace('.', '/') } as Set
+
+        def hasAnnotation = { List annotations, Set targets ->
+            if (annotations == null || annotations.isEmpty() || targets.isEmpty()) {
+                return false
+            }
+            return annotations.any { targets.contains(it.desc) }
+        }
+
+        def classInPackages = { String className ->
+            if (includePackages.isEmpty()) {
+                return false
+            }
+            return includePackages.any { className == it || className.startsWith(it + "/") }
+        }
+
+        def shouldEncryptClass = { ClassNode cn ->
+            if (excludeClasses.contains(cn.name)) {
+                return false
+            }
+            boolean inPkg = classInPackages(cn.name)
+            boolean annotated = hasAnnotation(cn.visibleAnnotations, includeAnnDesc) ||
+                    hasAnnotation(cn.invisibleAnnotations, includeAnnDesc)
+            boolean excluded = hasAnnotation(cn.visibleAnnotations, excludeAnnDesc) ||
+                    hasAnnotation(cn.invisibleAnnotations, excludeAnnDesc)
+            return !excluded && (inPkg || annotated)
+        }
+
+        def shouldEncryptField = { FieldNode fn, boolean classEncrypt ->
+            boolean excluded = hasAnnotation(fn.visibleAnnotations, excludeAnnDesc) ||
+                    hasAnnotation(fn.invisibleAnnotations, excludeAnnDesc)
+            if (excluded) {
+                return false
+            }
+            if (classEncrypt) {
+                return true
+            }
+            boolean annotated = hasAnnotation(fn.visibleAnnotations, includeAnnDesc) ||
+                    hasAnnotation(fn.invisibleAnnotations, includeAnnDesc)
+            return annotated
+        }
+
+        def shouldEncryptMethod = { MethodNode mn, boolean classEncrypt ->
+            boolean excluded = hasAnnotation(mn.visibleAnnotations, excludeAnnDesc) ||
+                    hasAnnotation(mn.invisibleAnnotations, excludeAnnDesc)
+            if (excluded) {
+                return false
+            }
+            if (classEncrypt) {
+                return true
+            }
+            boolean annotated = hasAnnotation(mn.visibleAnnotations, includeAnnDesc) ||
+                    hasAnnotation(mn.invisibleAnnotations, includeAnnDesc)
+            return annotated
+        }
+
+        def pushInt = { InsnList insnList, int value ->
+            if (value >= -1 && value <= 5) {
+                insnList.add(new InsnNode(Opcodes.ICONST_0 + value))
+            } else if (value >= -128 && value <= 127) {
+                insnList.add(new IntInsnNode(Opcodes.BIPUSH, value))
+            } else if (value >= -32768 && value <= 32767) {
+                insnList.add(new IntInsnNode(Opcodes.SIPUSH, value))
+            } else {
+                insnList.add(new LdcInsnNode(value))
+            }
+        }
+
+        def buildByteArray = { byte[] bytes ->
+            InsnList insnList = new InsnList()
+            if (bytes == null) {
+                insnList.add(new InsnNode(Opcodes.ACONST_NULL))
+                return insnList
+            }
+            pushInt(insnList, bytes.length)
+            insnList.add(new IntInsnNode(Opcodes.NEWARRAY, Opcodes.T_BYTE))
+            for (int i = 0; i < bytes.length; i++) {
+                insnList.add(new InsnNode(Opcodes.DUP))
+                pushInt(insnList, i)
+                pushInt(insnList, bytes[i])
+                insnList.add(new InsnNode(Opcodes.BASTORE))
+            }
+            return insnList
+        }
+
+        def encrypt = { String value, byte[] key, byte[] iv ->
+            def cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            def keySpec = new javax.crypto.spec.SecretKeySpec(key, "AES")
+            def gcmSpec = new javax.crypto.spec.GCMParameterSpec(128, iv)
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
+            return cipher.doFinal(value.getBytes("UTF-8"))
+        }
+
+        def ensureClinit = { ClassNode cn ->
+            MethodNode clinit = cn.methods.find { it.name == "<clinit>" && it.desc == "()V" }
+            if (clinit != null) {
+                return clinit
+            }
+            clinit = new MethodNode(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null)
+            clinit.instructions.add(new InsnNode(Opcodes.RETURN))
+            cn.methods.add(clinit)
+            return clinit
+        }
+
+        def secureRandom = new java.security.SecureRandom()
+        int classCount = 0
+        int stringCount = 0
+        fileTree(encryptedClassesDir).matching { include "**/*.class" }.each { File classFile ->
+            byte[] original = classFile.bytes
+            ClassReader cr = new ClassReader(original)
+            ClassNode cn = new ClassNode()
+            cr.accept(cn, ClassReader.EXPAND_FRAMES)
+
+            if (excludeClasses.contains(cn.name)) {
+                return
+            }
+            boolean classEncrypt = shouldEncryptClass(cn)
+            if (!classEncrypt && includeAnnDesc.isEmpty()) {
+                return
+            }
+
+            boolean changed = false
+            MethodNode clinit = null
+            cn.fields.each { FieldNode fn ->
+                if (!shouldEncryptField(fn, classEncrypt)) {
+                    return
+                }
+                if ((fn.access & Opcodes.ACC_STATIC) == 0) {
+                    return
+                }
+                if (fn.value instanceof String && "Ljava/lang/String;".equals(fn.desc)) {
+                    String text = (String) fn.value
+                    if (text != null && !text.isEmpty()) {
+                        byte[] iv = new byte[12]
+                        secureRandom.nextBytes(iv)
+                        byte[] encrypted = encrypt(text, keyBytes, iv)
+
+                        InsnList repl = new InsnList()
+                        repl.add(buildByteArray(encrypted))
+                        repl.add(buildByteArray(iv))
+                        repl.add(new MethodInsnNode(
+                                Opcodes.INVOKESTATIC,
+                                "cn/lacknb/blog/llm/stream/StringDecryptor",
+                                "d",
+                                "([B[B)Ljava/lang/String;",
+                                false
+                        ))
+                        repl.add(new org.objectweb.asm.tree.FieldInsnNode(
+                                Opcodes.PUTSTATIC,
+                                cn.name,
+                                fn.name,
+                                fn.desc
+                        ))
+
+                        if (clinit == null) {
+                            clinit = ensureClinit(cn)
+                        }
+                        AbstractInsnNode last = clinit.instructions.getLast()
+                        if (last != null && last.getOpcode() == Opcodes.RETURN) {
+                            clinit.instructions.insertBefore(last, repl)
+                        } else {
+                            clinit.instructions.add(repl)
+                        }
+
+                        fn.value = null
+                        changed = true
+                        stringCount++
+                    }
+                }
+            }
+
+            cn.methods.each { MethodNode mn ->
+                if (!shouldEncryptMethod(mn, classEncrypt)) {
+                    return
+                }
+                AbstractInsnNode insn = mn.instructions?.first
+                while (insn != null) {
+                    AbstractInsnNode next = insn.next
+                    if (insn instanceof LdcInsnNode && insn.cst instanceof String) {
+                        String text = (String) insn.cst
+                        if (text != null && !text.isEmpty()) {
+                            byte[] iv = new byte[12]
+                            secureRandom.nextBytes(iv)
+                            byte[] encrypted = encrypt(text, keyBytes, iv)
+                            InsnList repl = new InsnList()
+                            repl.add(buildByteArray(encrypted))
+                            repl.add(buildByteArray(iv))
+                            repl.add(new MethodInsnNode(
+                                    Opcodes.INVOKESTATIC,
+                                    "cn/lacknb/blog/llm/stream/StringDecryptor",
+                                    "d",
+                                    "([B[B)Ljava/lang/String;",
+                                    false
+                            ))
+                            mn.instructions.insert(insn, repl)
+                            mn.instructions.remove(insn)
+                            changed = true
+                            stringCount++
+                        }
+                    }
+                    insn = next
+                }
+            }
+
+            if (changed) {
+                ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS) {
+                    @Override
+                    protected String getCommonSuperClass(String type1, String type2) {
+                        return "java/lang/Object"
+                    }
+                }
+                cn.accept(cw)
+                classFile.bytes = cw.toByteArray()
+                classCount++
+            }
+        }
+        println "String encryption done. classes=${classCount}, strings=${stringCount}"
+    }
+}
+
+tasks.register('encryptedJar', Jar) {
+    dependsOn(tasks.named('encryptStrings'))
+    archiveClassifier.set("encrypted")
+    from(encryptedClassesDir)
+}
 // 引入类
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Opcodes
+import org.objectweb.asm.tree.AbstractInsnNode
+import org.objectweb.asm.tree.ClassNode
+import org.objectweb.asm.tree.InsnList
+import org.objectweb.asm.tree.InsnNode
+import org.objectweb.asm.tree.IntInsnNode
+import org.objectweb.asm.tree.LdcInsnNode
+import org.objectweb.asm.tree.MethodInsnNode
+import org.objectweb.asm.tree.MethodNode
+import org.objectweb.asm.tree.FieldNode
 import proguard.gradle.ProGuardTask
 
 tasks.register('obfuscateJar', ProGuardTask) {
 //    dependsOn instrumentedJar
-    dependsOn jar
+    dependsOn tasks.named('encryptedJar')
 
     // 插件不需要这一堆 args，直接调方法配置
     configuration 'proguard-rules.pro'
 
 //    injars instrumentedJar.archiveFile
-    injars jar.archiveFile
+    injars tasks.named('encryptedJar').flatMap { it.archiveFile }
     outjars "$buildDir/obfuscated/${project.name}-obf.jar"
 
     // 插件会自动处理这几百个 jar，不会截断

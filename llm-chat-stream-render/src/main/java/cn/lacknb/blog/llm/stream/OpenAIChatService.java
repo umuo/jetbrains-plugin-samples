@@ -18,6 +18,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * @author gitsilence
+ */
+@EncryptStrings
 public class OpenAIChatService {
     private static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
     private static final String DEFAULT_MODEL = "gpt-4o-mini";

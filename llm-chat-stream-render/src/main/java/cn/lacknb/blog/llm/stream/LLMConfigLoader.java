@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
+@EncryptStrings
 public class LLMConfigLoader {
     private static final String CONFIG_FILE = ".llm-chat-stream-render.json";
     private static final String EMBEDDED_CLASS = "cn.lacknb.blog.llm.stream.EmbeddedLLMConfig";

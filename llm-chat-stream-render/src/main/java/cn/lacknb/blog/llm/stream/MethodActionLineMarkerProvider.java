@@ -27,6 +27,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+@EncryptStrings
 public class MethodActionLineMarkerProvider extends LineMarkerProviderDescriptor implements DumbAware {
 
     public MethodActionLineMarkerProvider() {
