@@ -59,6 +59,7 @@ public class StreamMarkdownPanel extends JPanel {
     private static final int CODE_FLUSH_INTERVAL_MS = 16;
     private static final String CODE_COMMAND_GROUP = "LLM Stream Code";
     private static final int DELIMITER_TAIL = 12;
+    private static final int RECOVERY_MIN_HASH_DEFAULT = 4;
 
     public StreamMarkdownPanel(Project project) {
         this.project = project;
@@ -183,6 +184,21 @@ public class StreamMarkdownPanel extends JPanel {
             } else if (mode == BlockMode.CODE) {
                 int codeIndex = findFenceIndex(data, index);
                 if (codeIndex == -1) {
+                    int minHashes = RECOVERY_MIN_HASH_DEFAULT;
+                    if (isPlainTextLanguage(activeLanguage)) {
+                        minHashes = 2;
+                    }
+                    int recoveryIndex = findMarkdownHeadingIndex(data, index, minHashes);
+                    if (recoveryIndex != -1) {
+                        if (recoveryIndex > index) {
+                            appendCode(data.substring(index, recoveryIndex));
+                        }
+                        finishCodeBlock();
+                        index = recoveryIndex;
+                        continue;
+                    }
+                }
+                if (codeIndex == -1) {
                     if (force) {
                         appendCode(data.substring(index));
                         return;
@@ -244,6 +260,42 @@ public class StreamMarkdownPanel extends JPanel {
             }
         }
         return -1;
+    }
+
+    private int findMarkdownHeadingIndex(String data, int from, int minHashes) {
+        int len = data.length();
+        int i = Math.max(0, from);
+        while (i < len) {
+            if (!isLineStartWithIndent(data, i)) {
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < len && (data.charAt(j) == ' ' || data.charAt(j) == '\t')) {
+                j++;
+            }
+            int hashCount = 0;
+            while (j < len && data.charAt(j) == '#') {
+                hashCount++;
+                j++;
+            }
+            if (hashCount >= minHashes && j < len && data.charAt(j) == ' ') {
+                return i;
+            }
+            i = j + 1;
+        }
+        return -1;
+    }
+
+    private boolean isPlainTextLanguage(String language) {
+        if (language == null) {
+            return true;
+        }
+        String normalized = language.trim().toLowerCase();
+        return normalized.isEmpty()
+                || "text".equals(normalized)
+                || "plaintext".equals(normalized)
+                || "plain".equals(normalized);
     }
 
     private int findThinkIndex(String data, int from, String tag) {
