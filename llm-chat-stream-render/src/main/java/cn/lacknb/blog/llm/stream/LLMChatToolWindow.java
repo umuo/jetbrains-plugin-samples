@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.JBColor;
@@ -24,6 +25,8 @@ import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.JFileChooser;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.KeyStroke;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -32,8 +35,16 @@ import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 public class LLMChatToolWindow {
     public static final String TOOL_WINDOW_ID = "LLM Chat Stream";
@@ -49,6 +60,7 @@ public class LLMChatToolWindow {
     private final JBLabel statusLabel;
     private final OpenAIChatService chatService;
     private final List<ChatMessage> history = new ArrayList<>();
+    private final List<ChatMessage> sessionMessages = new ArrayList<>();
     private OpenAIChatService.StreamSession currentSession;
     private long requestCounter = 0L;
     private long activeRequestId = -1L;
@@ -107,6 +119,7 @@ public class LLMChatToolWindow {
             tip += "\n\nTip: set OPENAI_API_KEY or rebuild the plugin with an embedded config.";
         }
         addAssistantInfo(tip, false);
+        sessionMessages.clear();
     }
 
     public JComponent getContent() {
@@ -156,6 +169,13 @@ public class LLMChatToolWindow {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 clearChat();
+            }
+        });
+
+        group.add(new AnAction("Export", "Export current chat session to Markdown", AllIcons.Actions.MenuSaveall) {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent e) {
+                exportSessionToMarkdown();
             }
         });
 
@@ -225,6 +245,7 @@ public class LLMChatToolWindow {
         StreamMarkdownPanel assistantPanel = addAssistantMessagePanel();
         ChatMessage assistantMessage = new ChatMessage("assistant", "");
         history.add(assistantMessage);
+        sessionMessages.add(assistantMessage);
 
         setStreaming(true);
         long requestId = ++requestCounter;
@@ -241,6 +262,7 @@ public class LLMChatToolWindow {
                     return;
                 }
                 buffer.append(text);
+                assistantMessage.setContent(buffer.toString());
                 javax.swing.SwingUtilities.invokeLater(() -> {
                     if (requestId != activeRequestId) {
                         return;
@@ -319,6 +341,7 @@ public class LLMChatToolWindow {
         messagesPanel.revalidate();
         messagesPanel.repaint();
         history.clear();
+        sessionMessages.clear();
     }
 
     private void addUserMessage(String text) {
@@ -341,6 +364,7 @@ public class LLMChatToolWindow {
         messagesPanel.revalidate();
         messagesPanel.repaint();
         scrollToBottom();
+        sessionMessages.add(new ChatMessage("user", text));
     }
 
     private StreamMarkdownPanel addAssistantMessagePanel() {
@@ -397,9 +421,75 @@ public class LLMChatToolWindow {
     private void addAssistantInfo(String text, boolean remember) {
         StreamMarkdownPanel panel = addAssistantMessagePanel();
         panel.appendText(text);
+        sessionMessages.add(new ChatMessage("assistant", text));
         if (remember) {
             history.add(new ChatMessage("assistant", text));
         }
+    }
+
+    private void exportSessionToMarkdown() {
+        if (sessionMessages.isEmpty()) {
+            Messages.showInfoMessage(project, "No conversation messages to export.", "Export Session");
+            return;
+        }
+
+        File initialDir = project.getBasePath() == null ? new File(System.getProperty("user.home")) : new File(project.getBasePath());
+        String fileName = "chat-session-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date()) + ".md";
+
+        JFileChooser chooser = new JFileChooser(initialDir);
+        chooser.setDialogTitle("Export Session as Markdown");
+        chooser.setFileFilter(new FileNameExtensionFilter("Markdown files (*.md)", "md"));
+        chooser.setSelectedFile(new File(initialDir, fileName));
+
+        int result = chooser.showSaveDialog(mainPanel);
+        if (result != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+
+        File target = chooser.getSelectedFile();
+        if (!target.getName().toLowerCase(Locale.ROOT).endsWith(".md")) {
+            target = new File(target.getParentFile(), target.getName() + ".md");
+        }
+
+        String markdown = buildSessionMarkdown();
+        try {
+            Files.writeString(
+                    target.toPath(),
+                    markdown,
+                    StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING
+            );
+            statusLabel.setText("Exported: " + target.getName());
+        } catch (IOException ex) {
+            Messages.showErrorDialog(project, "Failed to export markdown: " + ex.getMessage(), "Export Session");
+        }
+    }
+
+    private String buildSessionMarkdown() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Chat Session Export\n\n");
+        sb.append("Exported at: ");
+        sb.append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(new Date()));
+        sb.append("\n\n");
+
+        for (ChatMessage message : sessionMessages) {
+            String role = message.getRole();
+            String heading;
+            if ("user".equals(role)) {
+                heading = "User";
+            } else if ("assistant".equals(role)) {
+                heading = "Assistant";
+            } else {
+                heading = role == null || role.isBlank() ? "Unknown" : role;
+            }
+            sb.append("## ").append(heading).append("\n\n");
+            String content = message.getContent();
+            sb.append(content == null || content.isBlank() ? "_(empty)_" : content);
+            sb.append("\n\n");
+        }
+
+        return sb.toString();
     }
 
     private void scrollToBottom() {
