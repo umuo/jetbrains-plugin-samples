@@ -72,3 +72,13 @@
 }
 # 其他所有内容都将被混淆，包括类成员名称
 # 这有助于减小最终插件包的大小并提供基本保护
+
+
+-keep public class cn.lacknb.blog.llm.stream.ChatSettingsConfigurable {
+    public <init>();
+    *;
+}
+-keep public class cn.lacknb.blog.llm.stream.ChatSettingsState {
+    public <init>();
+    *;
+}

@@ -12,5 +12,12 @@
                                         implementationClass="cn.lacknb.blog.llm.stream.MethodActionLineMarkerProvider"/>
         <toolWindow id="LLM Chat Stream" anchor="right"
                     factoryClass="cn.lacknb.blog.llm.stream.LLMChatToolWindowFactory"/>
+        <projectService serviceImplementation="cn.lacknb.blog.llm.stream.ChatSettingsState"/>
+        <projectConfigurable
+                parentId="tools"
+                instance="cn.lacknb.blog.llm.stream.ChatSettingsConfigurable"
+                id="cn.lacknb.blog.llm.stream.ChatSettings"
+                displayName="ChatSettings"
+                nonDefaultProject="true"/>
     </extensions>
 </idea-plugin>
