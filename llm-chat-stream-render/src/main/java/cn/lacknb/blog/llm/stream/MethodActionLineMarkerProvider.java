@@ -1,18 +1,19 @@
 package cn.lacknb.blog.llm.stream;
 
+import com.intellij.codeInsight.daemon.GutterIconNavigationHandler;
 import com.intellij.codeInsight.daemon.LineMarkerInfo;
 import com.intellij.codeInsight.daemon.LineMarkerProviderDescriptor;
-import com.intellij.codeInsight.daemon.GutterIconNavigationHandler;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.DataManager;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.actionSystem.DataContext;
-import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.popup.JBPopupFactory;
+import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.DumbAware;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiMethod;
@@ -46,7 +47,7 @@ public class MethodActionLineMarkerProvider extends LineMarkerProviderDescriptor
         for (PsiElement element : elements) {
             if (element instanceof PsiMethod) {
                 PsiMethod method = (PsiMethod) element;
-                if (!seen.add(method)) {
+                if (!seen.add(method) || !isAvailableFor(method)) {
                     continue;
                 }
                 PsiElement nameIdentifier = method.getNameIdentifier();
@@ -64,7 +65,7 @@ public class MethodActionLineMarkerProvider extends LineMarkerProviderDescriptor
                 continue;
             }
             PsiMethod method = (PsiMethod) parent;
-            if (!seen.add(method)) {
+            if (!seen.add(method) || !isAvailableFor(method)) {
                 continue;
             }
             result.add(createLineMarker(element, method));
@@ -102,6 +103,12 @@ public class MethodActionLineMarkerProvider extends LineMarkerProviderDescriptor
         @Override
         public void navigate(MouseEvent e, PsiElement elt) {
             Project project = method.getProject();
+            MyAuthService authService = project.getService(MyAuthService.class);
+            if (!authService.isLoggedIn()) {
+                Messages.showWarningDialog(project, authService.getUnauthenticatedMessage(), "LLM Chat 需要先登录");
+                LLMChatToolWindow.showAndSubmit(project, "");
+                return;
+            }
             DataContext context = DataManager.getInstance().getDataContext(e.getComponent());
             DefaultActionGroup group = new DefaultActionGroup();
             group.add(new AnAction("解释代码", "Explain this method", AllIcons.Actions.Help) {
@@ -129,6 +136,11 @@ public class MethodActionLineMarkerProvider extends LineMarkerProviderDescriptor
                     )
                     .show(new RelativePoint(e));
         }
+    }
+
+    private static boolean isAvailableFor(PsiMethod method) {
+        Project project = method.getProject();
+        return project != null && project.getService(MyAuthService.class).isLoggedIn();
     }
 
     private static String buildPrompt(String prefix, PsiMethod method) {

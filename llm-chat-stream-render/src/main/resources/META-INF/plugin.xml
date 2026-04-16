@@ -12,7 +12,12 @@
                                         implementationClass="cn.lacknb.blog.llm.stream.MethodActionLineMarkerProvider"/>
         <toolWindow id="LLM Chat Stream" anchor="right"
                     factoryClass="cn.lacknb.blog.llm.stream.LLMChatToolWindowFactory"/>
+        <postStartupActivity implementation="cn.lacknb.blog.llm.stream.AuthStartupActivity"/>
+        <statusBarWidgetFactory id="llm.chat.auth.status"
+                                implementation="cn.lacknb.blog.llm.stream.MyStatusBarWidgetFactory"/>
         <projectService serviceImplementation="cn.lacknb.blog.llm.stream.ChatSettingsState"/>
+        <projectService serviceImplementation="cn.lacknb.blog.llm.stream.MyAuthService"/>
+        <projectService serviceImplementation="cn.lacknb.blog.llm.stream.OAuthLoginService"/>
         <projectConfigurable
                 parentId="tools"
                 instance="cn.lacknb.blog.llm.stream.ChatSettingsConfigurable"

@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.intellij.openapi.project.Project;
 
 import java.io.IOException;
 import java.net.URI;
@@ -30,14 +31,14 @@ public class OpenAIChatService {
     private final String baseUrl;
     private final String model;
     private final String apiKey;
+    private final MyAuthService authService;
 
-    public OpenAIChatService(String baseUrl, String model, String apiKey) {
+    public OpenAIChatService(Project project, String baseUrl, String model, String apiKey) {
         this.baseUrl = baseUrl == null || baseUrl.isBlank() ? DEFAULT_BASE_URL : baseUrl;
         this.model = model == null || model.isBlank() ? DEFAULT_MODEL : model;
         this.apiKey = apiKey == null || apiKey.isBlank() ? getApiKey() : apiKey;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(30))
-                .build();
+        this.authService = project.getService(MyAuthService.class);
+        this.httpClient = IdeHttpClientFactory.create(Duration.ofSeconds(30));
     }
 
     public static String getApiKey() {
@@ -45,10 +46,9 @@ public class OpenAIChatService {
     }
 
     public StreamSession streamChatCompletion(List<ChatMessage> messages, StreamHandler handler) {
-        if (apiKey == null || apiKey.isBlank()) {
-            handler.onError(new IllegalStateException(
-                    "Missing API key. Set OPENAI_API_KEY or rebuild the plugin with an embedded config."
-            ));
+        String bearerToken = authService.getBearerToken();
+        if (bearerToken == null || bearerToken.isBlank()) {
+            handler.onError(new IllegalStateException(authService.getUnauthenticatedMessage()));
             return StreamSession.noop();
         }
 
@@ -66,11 +66,15 @@ public class OpenAIChatService {
         }
         payload.add("messages", jsonMessages);
 
-        HttpRequest request = HttpRequest.newBuilder()
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))
                 .timeout(Duration.ofMinutes(2))
-                .header("Authorization", "Bearer " + apiKey)
-                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + bearerToken)
+                .header("Content-Type", "application/json");
+        if (apiKey != null && !apiKey.isBlank()) {
+            requestBuilder.header("X-LLM-API-Key", apiKey);
+        }
+        HttpRequest request = requestBuilder
                 .POST(HttpRequest.BodyPublishers.ofString(payload.toString()))
                 .build();
 

@@ -82,3 +82,23 @@
     public <init>();
     *;
 }
+-keep public class cn.lacknb.blog.llm.stream.AuthStartupActivity {
+    public <init>();
+    *;
+}
+-keep public class cn.lacknb.blog.llm.stream.MyAuthService {
+    public <init>(...);
+    *;
+}
+-keep public class cn.lacknb.blog.llm.stream.OAuthLoginService {
+    public <init>(...);
+    *;
+}
+-keep public class cn.lacknb.blog.llm.stream.MyStatusBarWidgetFactory {
+    public <init>();
+    *;
+}
+-keep public class cn.lacknb.blog.llm.stream.MyStatusBarWidget {
+    public <init>(...);
+    *;
+}

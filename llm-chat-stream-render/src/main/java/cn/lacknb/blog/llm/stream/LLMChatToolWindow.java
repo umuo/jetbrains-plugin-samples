@@ -8,27 +8,31 @@ import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
+import com.intellij.ui.content.Content;
+import com.intellij.util.messages.MessageBusConnection;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
-import com.intellij.ui.content.Content;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.AbstractAction;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
+import javax.swing.JFileChooser;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
-import javax.swing.JFileChooser;
-import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.KeyStroke;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -49,16 +53,25 @@ import java.util.Locale;
 public class LLMChatToolWindow {
     public static final String TOOL_WINDOW_ID = "LLM Chat Stream";
     private static final String WINDOW_KEY = "LLMChatToolWindowInstance";
+    private static final String CARD_LOGIN = "LOGIN";
+    private static final String CARD_CONTENT = "CONTENT";
 
     private final Project project;
     private final JPanel mainPanel;
+    private final JPanel cardPanel;
+    private final CardLayout cardLayout;
     private final JPanel messagesPanel;
     private final JBScrollPane scrollPane;
     private final JTextArea inputArea;
     private final JButton sendButton;
     private final JButton stopButton;
     private final JBLabel statusLabel;
+    private final JBLabel authStatusLabel;
+    private final JBLabel loginMessageLabel;
+    private final JButton loginButton;
     private final OpenAIChatService chatService;
+    private final MyAuthService authService;
+    private final OAuthLoginService loginService;
     private final List<ChatMessage> history = new ArrayList<>();
     private final List<ChatMessage> sessionMessages = new ArrayList<>();
     private OpenAIChatService.StreamSession currentSession;
@@ -72,17 +85,21 @@ public class LLMChatToolWindow {
 
     public LLMChatToolWindow(Project project) {
         this.project = project;
+        this.authService = project.getService(MyAuthService.class);
+        this.loginService = project.getService(OAuthLoginService.class);
         LLMConfig config = LLMConfigLoader.load(project);
         String baseUrl = config != null ? config.getBaseUrl() : System.getenv("OPENAI_BASE_URL");
         String model = config != null ? config.getModel() : System.getenv("OPENAI_MODEL");
-        String apiKey = config != null ? config.getApiKey() : System.getenv("OPENAI_API_KEY");
-        this.chatService = new OpenAIChatService(baseUrl, model, apiKey);
+        this.chatService = new OpenAIChatService(project, baseUrl, model, null);
 
         mainPanel = new JPanel(new BorderLayout());
         mainPanel.putClientProperty(WINDOW_KEY, this);
 
+        cardLayout = new CardLayout();
+        cardPanel = new JPanel(cardLayout);
+
         messagesPanel = new ScrollablePanel();
-        messagesPanel.setLayout(new javax.swing.BoxLayout(messagesPanel, javax.swing.BoxLayout.Y_AXIS));
+        messagesPanel.setLayout(new BoxLayout(messagesPanel, BoxLayout.Y_AXIS));
         messagesPanel.setBackground(UIUtil.getPanelBackground());
         messagesPanel.setBorder(JBUI.Borders.empty());
 
@@ -106,20 +123,25 @@ public class LLMChatToolWindow {
 
         statusLabel = new JBLabel("Idle");
         statusLabel.setForeground(UIUtil.getLabelInfoForeground());
+        authStatusLabel = new JBLabel();
+        authStatusLabel.setForeground(UIUtil.getLabelInfoForeground());
+        loginMessageLabel = new JBLabel();
+        loginButton = new JButton("登录");
+        loginButton.addActionListener(e -> loginService.startLogin());
+
+        cardPanel.add(create登录Panel(), CARD_LOGIN);
+        cardPanel.add(createContentPanel(), CARD_CONTENT);
 
         mainPanel.add(createToolbar(), BorderLayout.NORTH);
-        mainPanel.add(scrollPane, BorderLayout.CENTER);
-        mainPanel.add(createInputPanel(), BorderLayout.SOUTH);
+        mainPanel.add(cardPanel, BorderLayout.CENTER);
 
         registerSendShortcut();
         scrollTimer = new javax.swing.Timer(100, e -> flushScroll());
         scrollTimer.setRepeats(true);
-        String tip = "Hello! Ask a question below. Markdown and code blocks are supported.";
-        if (config == null) {
-            tip += "\n\nTip: set OPENAI_API_KEY or rebuild the plugin with an embedded config.";
-        }
-        addAssistantInfo(tip, false);
+        addAssistantInfo("Hello! Ask a question below. Markdown and code blocks are supported.", false);
         sessionMessages.clear();
+        subscribeToAuthStatus();
+        refreshAuthUi(authService.getSession(), authService.getSession().getStatusMessage());
     }
 
     public JComponent getContent() {
@@ -146,12 +168,28 @@ public class LLMChatToolWindow {
         if (toolWindow == null) {
             return;
         }
+        MyAuthService authService = project.getService(MyAuthService.class);
+        if (!authService.isLoggedIn()) {
+            toolWindow.show(() -> {
+                LLMChatToolWindow instance = findInstance(project);
+                if (instance != null) {
+                    instance.show登录Required(authService.getUnauthenticatedMessage());
+                }
+            });
+            return;
+        }
         toolWindow.show(() -> {
             LLMChatToolWindow instance = findInstance(project);
             if (instance != null) {
                 instance.submitPrompt(prompt, true);
             }
         });
+    }
+
+    private void subscribeToAuthStatus() {
+        MessageBusConnection connection = project.getMessageBus().connect();
+        connection.subscribe(AuthStatusListener.TOPIC, (session, message) -> javax.swing.SwingUtilities.invokeLater(() -> refreshAuthUi(session, message)));
+        Disposer.register(project, connection);
     }
 
     private JComponent createToolbar() {
@@ -184,6 +222,45 @@ public class LLMChatToolWindow {
         return toolbar.getComponent();
     }
 
+    private JComponent createContentPanel() {
+        JPanel contentPanel = new JPanel(new BorderLayout());
+        contentPanel.add(scrollPane, BorderLayout.CENTER);
+        contentPanel.add(createInputPanel(), BorderLayout.SOUTH);
+        return contentPanel;
+    }
+
+    private JComponent create登录Panel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBackground(UIUtil.getPanelBackground());
+
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setBorder(JBUI.Borders.empty(24));
+        body.setBackground(UIUtil.getPanelBackground());
+
+        JBLabel title = new JBLabel("使用 LLM Chat 前请先登录");
+        title.setFont(UIUtil.getLabelFont().deriveFont(java.awt.Font.BOLD));
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.add(title);
+        body.add(javax.swing.Box.createVerticalStrut(12));
+
+        loginMessageLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.add(loginMessageLabel);
+        body.add(javax.swing.Box.createVerticalStrut(12));
+
+        loginButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.add(loginButton);
+        body.add(javax.swing.Box.createVerticalStrut(8));
+
+        JBLabel tip = new JBLabel("如果无法登录，请检查 .llm-chat-stream-render.json 中的 认证配置。");
+        tip.setForeground(UIUtil.getContextHelpForeground());
+        tip.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.add(tip);
+
+        panel.add(body, BorderLayout.NORTH);
+        return panel;
+    }
+
     private JComponent createInputPanel() {
         JPanel inputPanel = new JPanel(new BorderLayout());
         inputPanel.setBorder(JBUI.Borders.customLine(JBColor.border(), 1, 0, 0, 0));
@@ -196,6 +273,7 @@ public class LLMChatToolWindow {
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
         buttonPanel.setBackground(UIUtil.getPanelBackground());
+        buttonPanel.add(authStatusLabel);
         buttonPanel.add(statusLabel);
         buttonPanel.add(stopButton);
         buttonPanel.add(sendButton);
@@ -217,6 +295,9 @@ public class LLMChatToolWindow {
     }
 
     private void sendMessage() {
+        if (!ensureAuthenticated(true)) {
+            return;
+        }
         String text = inputArea.getText().trim();
         if (text.isEmpty()) {
             return;
@@ -227,6 +308,9 @@ public class LLMChatToolWindow {
 
     public void submitPrompt(String text, boolean newSession) {
         if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+        if (!ensureAuthenticated(true)) {
             return;
         }
 
@@ -307,16 +391,52 @@ public class LLMChatToolWindow {
         });
     }
 
+    private boolean ensureAuthenticated(boolean show登录Panel) {
+        if (authService.isLoggedIn()) {
+            return true;
+        }
+        if (show登录Panel) {
+            show登录Required(authService.getUnauthenticatedMessage());
+        }
+        return false;
+    }
+
+    private void refreshAuthUi(AuthSession session, String message) {
+        boolean loggedIn = session != null && session.isLoggedIn();
+        authStatusLabel.setText(loggedIn ? "已登录" : "未登录");
+        String statusMessage = message;
+        if ((statusMessage == null || statusMessage.trim().isEmpty()) && session != null) {
+            statusMessage = session.getStatusMessage();
+        }
+        loginMessageLabel.setText(toHtml(statusMessage != null ? statusMessage : "请先登录后再继续。"));
+        boolean loginAvailable = authService.getAuthConfig() != null && authService.getAuthConfig().isComplete();
+        loginButton.setEnabled(loginAvailable);
+        if (loggedIn) {
+            cardLayout.show(cardPanel, CARD_CONTENT);
+        } else {
+            cardLayout.show(cardPanel, CARD_LOGIN);
+        }
+        setStreaming(streaming && loggedIn);
+    }
+
+    private void show登录Required(String message) {
+        refreshAuthUi(authService.getSession(), message);
+        Messages.showWarningDialog(project, message, "LLM Chat 需要先登录");
+    }
+
+    private static String toHtml(String text) {
+        return "<html><body style='width:320px;'>" + text + "</body></html>";
+    }
+
     private void setStreaming(boolean value) {
         streaming = value;
         statusLabel.setText(value ? "Generating..." : "Idle");
-        sendButton.setEnabled(!value);
-        inputArea.setEditable(!value);
+        boolean authenticated = authService.isLoggedIn();
+        sendButton.setEnabled(authenticated && !value);
+        inputArea.setEditable(authenticated && !value);
         stopButton.setEnabled(value);
         if (!value) {
             currentSession = null;
-        }
-        if (!value) {
             scrollTimer.stop();
         }
     }
@@ -388,7 +508,7 @@ public class LLMChatToolWindow {
 
     private JPanel createMessageRow(JComponent bubble, boolean alignRight) {
         JPanel row = new JPanel();
-        row.setLayout(new javax.swing.BoxLayout(row, javax.swing.BoxLayout.X_AXIS));
+        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
         row.setBackground(UIUtil.getPanelBackground());
         row.setBorder(JBUI.Borders.empty(6, 8));
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
